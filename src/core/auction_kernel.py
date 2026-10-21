@@ -12,9 +12,17 @@ Design rules:
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Optional, Protocol, Tuple
+
+from src.core.auction_ladder import (
+    AuctionLadder,
+    LadderBid,
+    LadderBidStatus,
+    RankChange,
+    StatusTransition,
+)
 
 
 # --------------------------------------------------------------------------
@@ -139,12 +147,16 @@ class Auction:
     version: int = 0  # optimistic concurrency token
     highest_bid: Optional[Bid] = None
     bid_count: int = 0
+    ladder_size: int = 1  # K: number of ranked positions kept (ADR-001 Ladder)
+    ladder: Tuple[Bid, ...] = ()  # current top-K bids, rank 1 first
 
     def __post_init__(self) -> None:
         if self.starts_at.tzinfo is None or self.ends_at.tzinfo is None:
             raise ValueError("auction times must be timezone-aware")
         if self.ends_at <= self.starts_at:
             raise ValueError("ends_at must be after starts_at")
+        if self.ladder_size < 1:
+            raise ValueError("ladder_size must be >= 1")
 
     def minimum_next_bid(self) -> int:
         """Smallest amount a new bid may have right now."""
@@ -152,11 +164,17 @@ class Auction:
             return self.rules.base_price
         return self.highest_bid.amount + self.rules.min_increment
 
-    def accept(self, bid: Bid) -> "Auction":
-        """Return a new Auction state including the bid (immutable)."""
+    def accept(self, bid: Bid, ladder: Optional[Tuple[Bid, ...]] = None) -> "Auction":
+        """Return a new Auction state including the bid (immutable).
+
+        `ladder` is the new top-K tuple (rank 1 first); when omitted the
+        bid becomes the only ladder entry.
+        """
+        new_ladder = ladder if ladder is not None else (bid,)
         return replace(
             self,
-            highest_bid=bid,
+            highest_bid=new_ladder[0] if new_ladder else bid,
+            ladder=new_ladder,
             bid_count=self.bid_count + 1,
             version=self.version + 1,
         )
@@ -217,6 +235,9 @@ class SubmitBidResult:
     bid: Bid
     required_exposure: int
     guaranteed_amount: int
+    rank: int = 1
+    transitions: Tuple[StatusTransition, ...] = ()  # OUTBID / SUPERSEDED bids
+    rank_changes: Tuple[RankChange, ...] = ()
 
 
 def submit_bid(
@@ -301,9 +322,38 @@ def submit_bid(
         sequence=auction.bid_count + 1,
         idempotency_key=command.idempotency_key,
     )
+
+    # 6. Ladder: rebuild the current top-K deterministically, then place the
+    #    new bid. Order: amount desc, time asc, sequence asc.
+    ladder = AuctionLadder(auction.ladder_size)
+    for existing in sorted(auction.ladder, key=lambda b: b.sequence):
+        ladder.place(_to_ladder_bid(existing))
+    outcome = ladder.place(_to_ladder_bid(bid))
+    if not outcome.accepted:
+        # Cannot normally happen (the bid is above the current leader), but
+        # a bid that does not rank must never change auction state.
+        raise BidBelowMinimum(f"bid does not rank in top {auction.ladder_size}: {outcome.reason}")
+    by_id = {b.bid_id: b for b in auction.ladder}
+    by_id[bid.bid_id] = bid
+    new_ladder = tuple(by_id[e.bid.bid_id] for e in ladder.snapshot())
     return SubmitBidResult(
-        auction=auction.accept(bid),
+        auction=auction.accept(bid, new_ladder),
         bid=bid,
         required_exposure=required,
         guaranteed_amount=proof.guaranteed_amount,
+        rank=outcome.rank,
+        transitions=outcome.transitions,
+        rank_changes=outcome.rank_changes,
+    )
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _to_ladder_bid(bid: Bid) -> LadderBid:
+    return LadderBid(
+        bid_id=bid.bid_id,
+        bidder_id=bid.bidder_id,
+        amount=bid.amount,
+        timestamp=(bid.placed_at - _EPOCH) // timedelta(microseconds=1),
     )
