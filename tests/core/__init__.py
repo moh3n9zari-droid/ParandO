@@ -1,1 +1,0 @@
-"""Parando core tests."""

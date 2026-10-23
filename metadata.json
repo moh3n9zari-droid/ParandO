@@ -1,0 +1,8 @@
+{
+  "name": "Parando Auction Ecosystem",
+  "description": "Multi-tenant agentic auction ecosystem featuring pure domain logic auction kernel, ladder ranking, financial commitment guard, and multi-market modules.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
