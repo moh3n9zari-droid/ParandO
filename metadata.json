@@ -1,6 +1,6 @@
 {
   "name": "Parando National Auction Ecosystem",
-  "description": "سامانه حراج و مبادلات چندمستأجری ملی پاراندو مجهز به هسته منطقی ADR-001، ضمانت مالی تعهدات ADR-002 و پایداری در شبکه ملی",
+  "description": "سامانه حراج و مبادلات چندمستأجری ملی پرندو مجهز به هسته منطقی ADR-001، ضمانت مالی تعهدات ADR-002 و پایداری در شبکه ملی",
   "permissions": [],
   "capabilities": [
     "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
