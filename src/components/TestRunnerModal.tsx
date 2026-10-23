@@ -11,7 +11,7 @@ interface TestRunnerModalProps {
 export const TestRunnerModal: React.FC<TestRunnerModalProps> = ({ isOpen, onClose }) => {
   const [results, setResults] = useState<TestResult[]>([]);
   const [isRunning, setIsRunning] = useState<boolean>(false);
-  const [filter, setFilter] = useState<'همه' | 'نردبان (Ladder)' | 'هسته (Kernel)' | 'یکپارچگی (Integration)'>('همه');
+  const [filter, setFilter] = useState<'همه' | 'نردبان (Ladder)' | 'هسته (Kernel)' | 'یکپارچگی (Integration)' | 'تسویه (Settlement)' | 'افزونه‌ها (Extensions)'>('همه');
 
   const executeTests = () => {
     setIsRunning(true);
@@ -41,6 +41,10 @@ export const TestRunnerModal: React.FC<TestRunnerModalProps> = ({ isOpen, onClos
         return 'Kernel';
       case 'یکپارچگی (Integration)':
         return 'Integration';
+      case 'تسویه (Settlement)':
+        return 'Settlement';
+      case 'افزونه‌ها (Extensions)':
+        return 'Extensions';
       default:
         return 'All';
     }
@@ -80,8 +84,8 @@ export const TestRunnerModal: React.FC<TestRunnerModalProps> = ({ isOpen, onClos
 
         {/* Toolbar & Filter */}
         <div className="px-5 py-3 border-b border-slate-800 flex items-center justify-between text-xs bg-slate-900">
-          <div className="flex items-center space-x-2 space-x-reverse">
-            {(['همه', 'نردبان (Ladder)', 'هسته (Kernel)', 'یکپارچگی (Integration)'] as const).map((cat) => (
+          <div className="flex items-center space-x-2 space-x-reverse flex-wrap gap-y-1">
+            {(['همه', 'نردبان (Ladder)', 'هسته (Kernel)', 'یکپارچگی (Integration)', 'تسویه (Settlement)', 'افزونه‌ها (Extensions)'] as const).map((cat) => (
               <button
                 key={cat}
                 onClick={() => setFilter(cat)}

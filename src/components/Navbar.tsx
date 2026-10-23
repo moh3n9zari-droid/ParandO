@@ -1,7 +1,8 @@
-import React from 'react';
-import { Play, Pause, FastForward, RotateCcw, CheckCircle2, ShieldCheck, Wifi, WifiOff, RefreshCw } from 'lucide-react';
+import { Play, Pause, FastForward, RotateCcw, CheckCircle2, ShieldCheck, Wifi, WifiOff, RefreshCw, Receipt, FileCheck2 } from 'lucide-react';
 import { MarketModuleConfig } from '../data/market_modules';
 import { formatTimestamp, toPersianDigits } from '../utils/formatters';
+
+import { WebSocketConnectionStatus } from '../services/realtimeAuctionHub';
 
 interface NavbarProps {
   currentModule: MarketModuleConfig;
@@ -12,11 +13,16 @@ interface NavbarProps {
   onResetTime: () => void;
   onOpenTests: () => void;
   onOpenDocs: () => void;
+  onOpenAudit: () => void;
   isOnline: boolean;
   isSimulatingDisruption: boolean;
   onToggleDisruption: () => void;
   pendingQueueCount: number;
   onOpenQueueModal: () => void;
+  wsStatus: WebSocketConnectionStatus;
+  wsLatency: number;
+  onOpenSettlement: () => void;
+  hasSettlementStatement: boolean;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -28,11 +34,16 @@ export const Navbar: React.FC<NavbarProps> = ({
   onResetTime,
   onOpenTests,
   onOpenDocs,
+  onOpenAudit,
   isOnline,
   isSimulatingDisruption,
   onToggleDisruption,
   pendingQueueCount,
   onOpenQueueModal,
+  wsStatus,
+  wsLatency,
+  onOpenSettlement,
+  hasSettlementStatement,
 }) => {
   return (
     <header className="border-b border-slate-800 bg-slate-900/95 backdrop-blur sticky top-0 z-40">
@@ -138,21 +149,68 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         </div>
 
-        {/* Action Buttons: Verification Tests & Specs */}
+        {/* Action Buttons: WebSocket Status, Settlement, Verification Tests & Specs */}
         <div className="flex items-center space-x-2 space-x-reverse">
+          {/* WebSocket Live Status */}
+          <div
+            title={`اتصال زنده وب‌سوکت: پینگ ${toPersianDigits(wsLatency)} میلی‌ثانیه`}
+            className="hidden sm:flex items-center space-x-1.5 space-x-reverse px-2.5 py-1 text-xs rounded-lg bg-slate-950/80 border border-slate-800 text-slate-300 font-mono"
+          >
+            <span
+              className={`w-2 h-2 rounded-full ${
+                wsStatus === 'CONNECTED'
+                  ? 'bg-emerald-400 animate-pulse'
+                  : wsStatus === 'RECONNECTING'
+                  ? 'bg-amber-400 animate-ping'
+                  : 'bg-red-400'
+              }`}
+            />
+            <span className="text-[11px] font-sans text-slate-300">
+              {wsStatus === 'CONNECTED' ? 'وب‌سوکت: متصل' : wsStatus === 'RECONNECTING' ? 'اتصال مجدد...' : 'وب‌سوکت: قطع'}
+            </span>
+            <span className="text-[10px] text-slate-500 font-mono">({toPersianDigits(wsLatency)}ms)</span>
+          </div>
+
+          {/* ADR-003 Settlement Button */}
+          <button
+            onClick={onOpenSettlement}
+            className={`flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 text-xs font-medium rounded-lg transition cursor-pointer shadow-sm ${
+              hasSettlementStatement
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40 hover:bg-amber-500/30'
+                : 'bg-slate-800/90 text-slate-300 border border-slate-700 hover:bg-slate-800'
+            }`}
+          >
+            <Receipt className="w-4 h-4 text-amber-400" />
+            <span>تسویه ADR-003</span>
+            {hasSettlementStatement && (
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-ping" />
+            )}
+          </button>
+
+          {/* ADR-004 Audit & Compliance Report Button */}
+          <button
+            onClick={onOpenAudit}
+            className="flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-500/10 text-indigo-300 border border-indigo-500/30 hover:bg-indigo-500/20 transition cursor-pointer shadow-sm"
+          >
+            <FileCheck2 className="w-4 h-4 text-indigo-400" />
+            <span className="hidden sm:inline">ممیزی و بازپخش</span>
+            <span className="sm:hidden">ممیزی</span>
+          </button>
+
           <button
             onClick={onOpenTests}
             className="flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 text-xs font-medium rounded-lg bg-emerald-500/10 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/20 transition cursor-pointer shadow-sm"
           >
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-            <span>آزمون‌های هسته و API</span>
+            <span className="hidden sm:inline">آزمون‌های هسته و API</span>
+            <span className="sm:hidden">تست‌ها</span>
           </button>
           <button
             onClick={onOpenDocs}
-            className="flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition cursor-pointer"
+            className="hidden lg:flex items-center space-x-1.5 space-x-reverse px-3 py-1.5 text-xs font-medium rounded-lg bg-slate-800 text-slate-300 border border-slate-700 hover:bg-slate-700 transition cursor-pointer"
           >
             <ShieldCheck className="w-4 h-4 text-amber-400" />
-            <span>مستندات معماری ADR</span>
+            <span>مستندات ADR</span>
           </button>
         </div>
       </div>

@@ -6,9 +6,10 @@ import { Trophy, TrendingUp, ShieldAlert, Award } from 'lucide-react';
 interface LadderViewProps {
   competition: Competition;
   activeOffererId: string;
+  lastUpdatedOfferId?: string;
 }
 
-export const LadderView: React.FC<LadderViewProps> = ({ competition, activeOffererId }) => {
+export const LadderView: React.FC<LadderViewProps> = ({ competition, activeOffererId, lastUpdatedOfferId }) => {
   const ladder = competition.ladder;
   const k = competition.ladderSize;
   const isFull = ladder.length >= k;
@@ -28,6 +29,10 @@ export const LadderView: React.FC<LadderViewProps> = ({ competition, activeOffer
               نردبان رقابت برترین‌ها
               <span className="text-xs px-2 py-0.5 rounded font-mono font-normal bg-slate-800 text-slate-300 border border-slate-700">
                 {toPersianDigits(k)} جایگاه برتر (K={toPersianDigits(k)})
+              </span>
+              <span className="hidden sm:inline-flex items-center gap-1 text-[10px] font-mono font-normal text-emerald-400 bg-emerald-950/40 px-1.5 py-0.5 rounded border border-emerald-500/30">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                پخش زنده WebSocket
               </span>
             </h3>
             <p className="text-xs text-slate-400">
@@ -81,11 +86,15 @@ export const LadderView: React.FC<LadderViewProps> = ({ competition, activeOffer
             const dual = formatDualCurrency(offer.amount);
             const deltaLeader = leader && !isLeader ? leader.amount - offer.amount : 0;
 
+            const isRecentlyUpdated = offer.offerId === lastUpdatedOfferId;
+
             return (
               <div
                 key={offer.offerId}
-                className={`relative rounded-xl p-3.5 border transition-all ${
-                  isLeader
+                className={`relative rounded-xl p-3.5 border transition-all duration-300 ${
+                  isRecentlyUpdated
+                    ? 'ring-2 ring-emerald-400 bg-emerald-950/30 border-emerald-500 scale-[1.01]'
+                    : isLeader
                     ? 'bg-gradient-to-l from-amber-950/30 via-slate-900 to-slate-900 border-amber-500/40 shadow-sm'
                     : isCurrentOfferer
                     ? 'bg-slate-800/80 border-sky-500/40'

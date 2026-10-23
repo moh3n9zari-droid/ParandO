@@ -27,9 +27,21 @@ import {
   OfferConflict,
 } from './competition_kernel';
 
+import {
+  createLadderDeterminedEvent,
+  calculateSettlement,
+  DEFAULT_SETTLEMENT_CONFIG,
+} from './settlement_module';
+import {
+  SecurityVelocityHook,
+  AMLComplianceHook,
+  MarketIntegrityHook,
+  HookRegistry,
+} from './extension_hooks';
+
 export interface TestResult {
   name: string;
-  category: 'Ladder' | 'Kernel' | 'Integration';
+  category: 'Ladder' | 'Kernel' | 'Integration' | 'Settlement' | 'Extensions';
   status: 'passed' | 'failed';
   error?: string;
   durationMs: number;
@@ -398,6 +410,295 @@ export function runAllCoreTests(): TestResult[] {
     const ladderIds = r.competition.ladder.map((o) => o.offerId);
     if (JSON.stringify(ladderIds) !== JSON.stringify(['x2', 'x1'])) {
       throw new Error(`Ladder mismatch: ${ladderIds.join(',')}`);
+    }
+  });
+
+  // --- ADR-003: Settlement & Post-Competition Accounting Tests ---
+  runTest('ADR-003 / Settlement: ladder.determined event emitted with seal and ladder snapshot', 'Settlement', () => {
+    let c = makeCompetition({ ladderSize: 3 });
+    const clock = new FixedClock(NOW);
+    const guard = new FakeGuard(makeProof({ offererId: 'winner-1', guaranteedAmount: BASE_PRICE * 2 }));
+    const cmd = makeCommand({
+      offerer: makeOfferer({ offererId: 'winner-1' }),
+      amount: BASE_PRICE + 100_000,
+      offerId: 'win-off-1',
+      idempotencyKey: 'idem-win',
+    });
+    c = submitOffer(c, cmd, guard, clock).competition;
+
+    const event = createLadderDeterminedEvent(c, NOW);
+    if (event.eventType !== 'ladder.determined') throw new Error('Event type must be ladder.determined');
+    if (event.competitionId !== 'C1') throw new Error('Competition ID mismatch');
+    if (event.winnerOffer?.offerId !== 'win-off-1') throw new Error('Winner offer ID mismatch');
+    if (event.finalLadder.length !== 1) throw new Error('Final ladder length mismatch');
+    if (!event.sealDigest.startsWith('SEAL-')) throw new Error('Invalid seal digest format');
+  });
+
+  runTest('ADR-003 / Settlement: calculate platform fee, VAT (10%), transfer tax, and unfreeze losers', 'Settlement', () => {
+    let c = makeCompetition({ ladderSize: 3 });
+    const clock = new FixedClock(NOW);
+    
+    // Bidder 1
+    const guard1 = new FakeGuard(makeProof({ offererId: 'o1', guaranteedAmount: 2_000_000 }));
+    c = submitOffer(c, makeCommand({ offerer: makeOfferer({ offererId: 'o1' }), amount: 1_000_000, offerId: 'off-1', idempotencyKey: 'id-1' }), guard1, clock).competition;
+    
+    // Bidder 2 (Winner)
+    const guard2 = new FakeGuard(makeProof({ offererId: 'o2', guaranteedAmount: 2_000_000 }));
+    c = submitOffer(c, makeCommand({ offerer: makeOfferer({ offererId: 'o2' }), amount: 1_200_000, offerId: 'off-2', idempotencyKey: 'id-2' }), guard2, clock).competition;
+
+    const participants = [
+      { offererId: 'o1', tenantId: 'T1' },
+      { offererId: 'o2', tenantId: 'T1' },
+      { offererId: 'seller', tenantId: 'T1' },
+    ];
+
+    const breakdown = calculateSettlement(c, participants, DEFAULT_SETTLEMENT_CONFIG, NOW);
+
+    // Gross: 1,200,000
+    // Platform fee (50 bps = 0.5%): 6,000
+    // VAT (1000 bps = 10% on platform fee): 600
+    // Transfer Tax (50 bps = 0.5%): 6,000
+    // Total Deductions: 12,600
+    // Net Payable: 1,200,000 - 12,600 = 1,187,400
+    if (breakdown.grossAmount !== 1_200_000) throw new Error(`Gross amount mismatch: got ${breakdown.grossAmount}`);
+    if (breakdown.platformFeeAmount !== 6_000) throw new Error(`Platform fee mismatch: got ${breakdown.platformFeeAmount}`);
+    if (breakdown.vatAmount !== 600) throw new Error(`VAT mismatch: got ${breakdown.vatAmount}`);
+    if (breakdown.statutoryTransferTaxAmount !== 6_000) throw new Error(`Transfer tax mismatch: got ${breakdown.statutoryTransferTaxAmount}`);
+    if (breakdown.totalDeductions !== 12_600) throw new Error(`Total deductions mismatch: got ${breakdown.totalDeductions}`);
+    if (breakdown.netPayableToSeller !== 1_187_400) throw new Error(`Net payable mismatch: got ${breakdown.netPayableToSeller}`);
+
+    // Verify unfreeze authorizations
+    const o1Instruction = breakdown.unfreezeInstructions.find((i) => i.offererId === 'o1');
+    if (!o1Instruction || o1Instruction.status !== 'UNFREEZE_AUTHORIZED') {
+      throw new Error('Outbid participant o1 should have UNFREEZE_AUTHORIZED status');
+    }
+    const o2Instruction = breakdown.unfreezeInstructions.find((i) => i.offererId === 'o2');
+    if (!o2Instruction || o2Instruction.status !== 'RETAINED_FOR_SETTLEMENT') {
+      throw new Error('Winner o2 should have RETAINED_FOR_SETTLEMENT status');
+    }
+  });
+
+  // --------------------------------------------------------------------------
+  // ADR-004: Extension Hooks & Deterministic Replay Tests
+  // --------------------------------------------------------------------------
+
+  runTest('ADR-004 / Hooks: SecurityVelocityHook rejects high-frequency spam submissions', 'Extensions', () => {
+    const velocityHook = new SecurityVelocityHook(500); // 500ms required interval
+    const comp = makeCompetition();
+    const offerer = makeOfferer({ offererId: 'rapid-bidder' });
+
+    // First offer at t=0
+    const eval1 = velocityHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 1_000_000,
+      idempotencyKey: 'vel-1',
+      offerId: 'off-1',
+      timestamp: new Date(NOW.getTime()),
+    });
+    if (!eval1.allowed) throw new Error('First offer should be permitted by velocity hook');
+
+    // Immediate second offer at t=100ms (< 500ms)
+    const eval2 = velocityHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 1_100_000,
+      idempotencyKey: 'vel-2',
+      offerId: 'off-2',
+      timestamp: new Date(NOW.getTime() + 100),
+    });
+    if (eval2.allowed || eval2.code !== 'RATE_LIMIT_EXCEEDED') {
+      throw new Error('Immediate successive offer should be rejected with RATE_LIMIT_EXCEEDED');
+    }
+
+    // Subsequent offer at t=600ms (>= 500ms)
+    const eval3 = velocityHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 1_200_000,
+      idempotencyKey: 'vel-3',
+      offerId: 'off-3',
+      timestamp: new Date(NOW.getTime() + 600),
+    });
+    if (!eval3.allowed) throw new Error('Offer after interval expiry should be permitted');
+  });
+
+  runTest('ADR-004 / Hooks: AMLComplianceHook blocks abnormal price surge and regulatory ceiling', 'Extensions', () => {
+    const amlHook = new AMLComplianceHook(10, 500_000_000_000);
+    const comp = makeCompetition(); // basePrice: 1,000,000
+    const offerer = makeOfferer({ offererId: 'aml-check' });
+
+    // Normal offer: 2,000,000 (2x base price) -> allowed
+    const evalNormal = amlHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 2_000_000,
+      idempotencyKey: 'aml-1',
+      offerId: 'off-1',
+      timestamp: NOW,
+    });
+    if (!evalNormal.allowed) throw new Error('Normal offer should be allowed by AML hook');
+
+    // Excessive multiplier offer: 15,000,000 (15x base price > 10x limit) -> rejected
+    const evalSurge = amlHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 15_000_000,
+      idempotencyKey: 'aml-2',
+      offerId: 'off-2',
+      timestamp: NOW,
+    });
+    if (evalSurge.allowed || evalSurge.code !== 'IRREGULAR_PRICE_SURGE') {
+      throw new Error('Excessive price multiplier should be rejected with IRREGULAR_PRICE_SURGE');
+    }
+
+    // Absolute cap exceeded: > 500 Billion Rials -> rejected
+    const evalCeiling = amlHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 600_000_000_000,
+      idempotencyKey: 'aml-3',
+      offerId: 'off-3',
+      timestamp: NOW,
+    });
+    if (evalCeiling.allowed || evalCeiling.code !== 'AML_CEILING_EXCEEDED') {
+      throw new Error('Offer exceeding AML ceiling should be rejected with AML_CEILING_EXCEEDED');
+    }
+  });
+
+  runTest('ADR-004 / Hooks: MarketIntegrityHook guards against self-competition jump', 'Extensions', () => {
+    const integrityHook = new MarketIntegrityHook();
+    let comp = makeCompetition();
+    const offerer = makeOfferer({ offererId: 'solo-bidder' });
+    const guard = new FakeGuard(makeProof({ offererId: 'solo-bidder', guaranteedAmount: 200_000_000 }));
+    const clock = new FixedClock(NOW);
+
+    // Initial offer: 1,000,000
+    comp = submitOffer(
+      comp,
+      makeCommand({ offerer, amount: 1_000_000, offerId: 'off-init', idempotencyKey: 'idem-init' }),
+      guard,
+      clock
+    ).competition;
+
+    // Solo bidder attempts to jump over own highest offer by 100 increments (limit is 50)
+    const evalSelf = integrityHook.beforeSubmitOffer({
+      competition: comp,
+      offerer,
+      amount: 1_000_000 + 10_000 * 100, // 100x minIncrement jump over self
+      idempotencyKey: 'idem-self-jump',
+      offerId: 'off-jump',
+      timestamp: NOW,
+    });
+
+    if (evalSelf.allowed || evalSelf.code !== 'SELF_COMPETITION_SURGE') {
+      throw new Error('Self-competition surge should be blocked with SELF_COMPETITION_SURGE');
+    }
+  });
+
+  runTest('ADR-004 / Replay: Deterministic Replay yields 100% Top-K match and zero drift', 'Extensions', () => {
+    // 1. Run live stream
+    let liveComp = makeCompetition({ ladderSize: 3 });
+    const guard = new FakeGuard(makeProof({ offererId: 'any', guaranteedAmount: 50_000_000 }));
+    const recordedEvents: Array<{ offererId: string; amount: number; offerId: string; idKey: string; rank: number }> = [];
+
+    const offersData = [
+      { offererId: 'user-a', amount: 1_000_000, offerId: 'off-a', idKey: 'k-a' },
+      { offererId: 'user-b', amount: 1_200_000, offerId: 'off-b', idKey: 'k-b' },
+      { offererId: 'user-c', amount: 1_100_000, offerId: 'off-c', idKey: 'k-c' },
+      { offererId: 'user-d', amount: 1_300_000, offerId: 'off-d', idKey: 'k-d' },
+      { offererId: 'user-e', amount: 1_200_000, offerId: 'off-e', idKey: 'k-e' }, // tie with user-b, user-b has earlier sequence
+    ];
+
+    for (let i = 0; i < offersData.length; i++) {
+      const d = offersData[i];
+      const clock = new FixedClock(new Date(NOW.getTime() + i * 1000));
+      const res = submitOffer(
+        liveComp,
+        makeCommand({
+          offerer: makeOfferer({ offererId: d.offererId }),
+          amount: d.amount,
+          offerId: d.offerId,
+          idempotencyKey: d.idKey,
+        }),
+        guard,
+        clock
+      );
+      liveComp = res.competition;
+      recordedEvents.push({ ...d, rank: res.rank });
+    }
+
+    // 2. Replay in a fresh isolated sandbox
+    let replayComp = makeCompetition({ ladderSize: 3 });
+    const replaySeenMap = new Map();
+    let driftCount = 0;
+
+    for (let i = 0; i < recordedEvents.length; i++) {
+      const evt = recordedEvents[i];
+      const clock = new FixedClock(new Date(NOW.getTime() + i * 1000));
+      const res = submitOffer(
+        replayComp,
+        makeCommand({
+          offerer: makeOfferer({ offererId: evt.offererId }),
+          amount: evt.amount,
+          offerId: evt.offerId,
+          idempotencyKey: `replay-${evt.idKey}`,
+        }),
+        guard,
+        clock,
+        replaySeenMap
+      );
+      replayComp = res.competition;
+      if (res.rank !== evt.rank) {
+        driftCount++;
+      }
+    }
+
+    if (driftCount !== 0) {
+      throw new Error(`Deterministic replay detected ${driftCount} rank drifts! Expected 0.`);
+    }
+
+    // Compare ladders
+    if (liveComp.ladder.length !== replayComp.ladder.length) {
+      throw new Error('Replayed ladder size does not match live ladder size');
+    }
+    for (let i = 0; i < liveComp.ladder.length; i++) {
+      if (
+        liveComp.ladder[i].amount !== replayComp.ladder[i].amount ||
+        liveComp.ladder[i].offererId !== replayComp.ladder[i].offererId
+      ) {
+        throw new Error(`Ladder entry at rank ${i + 1} diverged between live and replayed state`);
+      }
+    }
+  });
+
+  runTest('ADR-004 / Telemetry: HookRegistry logs audit telemetry events with proper schema', 'Extensions', () => {
+    const registry = HookRegistry.getInstance();
+    const initialLogCount = registry.getTelemetryLogs().length;
+
+    const comp = makeCompetition();
+    const offerer = makeOfferer({ offererId: 'telemetry-test-user' });
+
+    // Trigger evaluateBeforeOffer
+    const res = registry.evaluateBeforeOffer({
+      competition: comp,
+      offerer,
+      amount: 1_500_000,
+      idempotencyKey: 'tel-test-key',
+      offerId: 'tel-test-offer',
+      timestamp: NOW,
+    });
+
+    if (!res.allowed) throw new Error('Evaluation should pass for valid offer');
+
+    const logsAfter = registry.getTelemetryLogs();
+    if (logsAfter.length <= initialLogCount) {
+      throw new Error('Telemetry log was not recorded by HookRegistry');
+    }
+
+    const latest = logsAfter[0];
+    if (latest.eventType !== 'PRE_CHECK_PASSED') {
+      throw new Error(`Expected PRE_CHECK_PASSED eventType, got ${latest.eventType}`);
     }
   });
 

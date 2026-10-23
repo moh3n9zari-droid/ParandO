@@ -2,7 +2,7 @@ import React from 'react';
 import { Competition, CompetitionStatus } from '../core/competition_kernel';
 import { MarketModuleConfig } from '../data/market_modules';
 import { formatDualCurrency, formatDuration, toPersianDigits } from '../utils/formatters';
-import { Clock } from 'lucide-react';
+import { Clock, Receipt } from 'lucide-react';
 
 interface AuctionHeaderProps {
   competition: Competition;
@@ -10,6 +10,8 @@ interface AuctionHeaderProps {
   currentTime: Date;
   onChangeStatus: (status: CompetitionStatus) => void;
   onModifyLadderSize: (size: number) => void;
+  onOpenSettlement: () => void;
+  hasSettlementStatement: boolean;
 }
 
 export const AuctionHeader: React.FC<AuctionHeaderProps> = ({
@@ -18,6 +20,8 @@ export const AuctionHeader: React.FC<AuctionHeaderProps> = ({
   currentTime,
   onChangeStatus,
   onModifyLadderSize,
+  onOpenSettlement,
+  hasSettlementStatement,
 }) => {
   const timeLeftMs = competition.endsAt.getTime() - currentTime.getTime();
   const timeToStartMs = competition.startsAt.getTime() - currentTime.getTime();
@@ -125,10 +129,23 @@ export const AuctionHeader: React.FC<AuctionHeaderProps> = ({
                   {item.label}
                 </button>
               ))}
+                <button
+                  type="button"
+                  onClick={onOpenSettlement}
+                  title="مشاهده سند تسویه مالی ADR-003 و تسهیم وجوه"
+                  className={`px-2 py-1 text-[11px] rounded transition cursor-pointer flex items-center gap-1 ${
+                    hasSettlementStatement || competition.status === CompetitionStatus.CLOSED
+                      ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 font-bold'
+                      : 'bg-slate-800 text-slate-300 hover:text-white'
+                  }`}
+                >
+                  <Receipt className="w-3 h-3 text-amber-400" />
+                  <span>تسویه ADR-003</span>
+                </button>
+              </div>
             </div>
           </div>
         </div>
-      </div>
 
       {/* Rules Metric Strip */}
       <div className="mt-4 pt-4 border-t border-slate-800/80 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3 text-xs">

@@ -24,6 +24,11 @@ import { TestRunnerModal } from './components/TestRunnerModal';
 import { ArchitectureInfoModal } from './components/ArchitectureInfoModal';
 import { NetworkResilienceModal } from './components/NetworkResilienceModal';
 import { OfflineResilienceManager, ResilientOffer } from './services/resilienceQueue';
+import { RealTimeAuctionHub, WebSocketConnectionStatus, RealTimeEvent } from './services/realtimeAuctionHub';
+import { createLadderDeterminedEvent, processSettlement, SettlementStatement } from './core/settlement_module';
+import { SettlementModal } from './components/SettlementModal';
+import { HookRegistry } from './core/extension_hooks';
+import { AuditComplianceModal } from './components/AuditComplianceModal';
 import { formatDualCurrency, toPersianDigits } from './utils/formatters';
 
 export function App() {
@@ -37,6 +42,21 @@ export function App() {
   const [isTestModalOpen, setIsTestModalOpen] = useState<boolean>(false);
   const [isDocsModalOpen, setIsDocsModalOpen] = useState<boolean>(false);
   const [isResilienceModalOpen, setIsResilienceModalOpen] = useState<boolean>(false);
+  const [isSettlementModalOpen, setIsSettlementModalOpen] = useState<boolean>(false);
+  const [isAuditModalOpen, setIsAuditModalOpen] = useState<boolean>(false);
+
+  // ADR-004 Hook Registry
+  const hookRegistry = useMemo(() => HookRegistry.getInstance(), []);
+
+  // Real-Time WebSocket Hub State
+  const realtimeHub = useMemo(() => RealTimeAuctionHub.getInstance(), []);
+  const [wsStatus, setWsStatus] = useState<WebSocketConnectionStatus>('CONNECTED');
+  const [wsLatency, setWsLatency] = useState<number>(24);
+  const [lastUpdatedOfferId, setLastUpdatedOfferId] = useState<string | undefined>(undefined);
+
+  // Settlement Module (ADR-003) State
+  const [settlementStatement, setSettlementStatement] = useState<SettlementStatement | null>(null);
+  const [isSettlementFinalized, setIsSettlementFinalized] = useState<boolean>(false);
 
   // National Network Resilience Queue State
   const resilienceManager = useMemo(() => OfflineResilienceManager.getInstance(), []);
@@ -51,6 +71,32 @@ export function App() {
     });
     return unsub;
   }, [resilienceManager]);
+
+  // Real-Time WebSocket Hub Listener
+  useEffect(() => {
+    const unsubStatus = realtimeHub.subscribeStatus((st, lat) => {
+      setWsStatus(st);
+      setWsLatency(lat);
+    });
+
+    const unsubEvents = realtimeHub.subscribe((event: RealTimeEvent) => {
+      if (event.type === 'LADDER_UPDATED') {
+        if (event.payload.ladder.length > 0) {
+          setLastUpdatedOfferId(event.payload.ladder[0].offerId);
+        }
+      } else if (event.type === 'LADDER_DETERMINED') {
+        if (event.payload.statement) {
+          setSettlementStatement(event.payload.statement);
+          setIsSettlementFinalized(true);
+        }
+      }
+    });
+
+    return () => {
+      unsubStatus();
+      unsubEvents();
+    };
+  }, [realtimeHub]);
 
   // Initialize Competition based on Market Module (TR-01)
   const createInitialCompetition = (mod: MarketModuleConfig, baseTime: Date) => {
@@ -151,20 +197,70 @@ export function App() {
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<string | null>(null);
 
-  // Clock interval
+  // Clock interval with WebSocket real-time broadcast
   useEffect(() => {
     if (!isClockRunning) return;
     const interval = setInterval(() => {
-      setCurrentTime((prev) => new Date(prev.getTime() + 1000));
+      setCurrentTime((prev) => {
+        const next = new Date(prev.getTime() + 1000);
+        const remainingSeconds = Math.max(0, Math.floor((competition.endsAt.getTime() - next.getTime()) / 1000));
+        realtimeHub.broadcastTick(next.getTime(), remainingSeconds, remainingSeconds === 0);
+        return next;
+      });
     }, 1000);
     return () => clearInterval(interval);
-  }, [isClockRunning]);
+  }, [isClockRunning, competition.endsAt, realtimeHub]);
+
+  // ADR-003 Settlement Finalizer
+  const finalizeSettlementFor = (comp: Competition) => {
+    const event = createLadderDeterminedEvent(comp);
+    const statement = processSettlement(
+      event,
+      proofs.map((p) => ({
+        offererId: p.offererId,
+        tenantId: p.tenantId,
+        guaranteedAmount: p.guaranteedAmount,
+      }))
+    );
+    setSettlementStatement(statement);
+    setIsSettlementFinalized(true);
+    realtimeHub.broadcastLadderDetermined(event, statement);
+    hookRegistry.dispatchOnDetermined({
+      competition: comp,
+      statement,
+      timestamp: currentTime,
+    });
+    setLastSuccess(`رویداد رسمی ladder.determined صادر شد و صورت‌حساب مالی ADR-003 نهایی گردید.`);
+  };
+
+  const handleOpenSettlement = () => {
+    if (!settlementStatement) {
+      const event = createLadderDeterminedEvent(competition);
+      const draft = processSettlement(
+        event,
+        proofs.map((p) => ({
+          offererId: p.offererId,
+          tenantId: p.tenantId,
+          guaranteedAmount: p.guaranteedAmount,
+        }))
+      );
+      setSettlementStatement(draft);
+    }
+    setIsSettlementModalOpen(true);
+  };
+
+  const handleFinalizeSettlement = () => {
+    handleChangeStatus(CompetitionStatus.CLOSED);
+  };
 
   // Market Switch
   const handleSelectModule = (mod: MarketModuleConfig) => {
     setCurrentModule(mod);
     const newComp = createInitialCompetition(mod, currentTime);
     setCompetition(newComp);
+    setSettlementStatement(null);
+    setIsSettlementFinalized(false);
+    setLastUpdatedOfferId(undefined);
 
     const updatedOfferers: Offerer[] = [
       { offererId: 'offerer-alpha', tenantId: mod.tenantId, isEligible: true },
@@ -200,25 +296,31 @@ export function App() {
     const fresh = new Date();
     setCurrentTime(fresh);
     setCompetition(createInitialCompetition(currentModule, fresh));
+    setSettlementStatement(null);
+    setIsSettlementFinalized(false);
   };
 
   const handleChangeStatus = (status: CompetitionStatus) => {
-    setCompetition(
-      new Competition({
-        competitionId: competition.competitionId,
-        tenantId: competition.tenantId,
-        sellerId: competition.sellerId,
-        rules: competition.rules,
-        startsAt: competition.startsAt,
-        endsAt: competition.endsAt,
-        status,
-        version: competition.version,
-        highestOffer: competition.highestOffer,
-        offerCount: competition.offerCount,
-        ladderSize: competition.ladderSize,
-        ladder: competition.ladder,
-      })
-    );
+    const updatedComp = new Competition({
+      competitionId: competition.competitionId,
+      tenantId: competition.tenantId,
+      sellerId: competition.sellerId,
+      rules: competition.rules,
+      startsAt: competition.startsAt,
+      endsAt: competition.endsAt,
+      status,
+      version: competition.version,
+      highestOffer: competition.highestOffer,
+      offerCount: competition.offerCount,
+      ladderSize: competition.ladderSize,
+      ladder: competition.ladder,
+    });
+    setCompetition(updatedComp);
+    realtimeHub.broadcastStatusChanged(updatedComp.competitionId, status);
+
+    if (status === CompetitionStatus.CLOSED) {
+      finalizeSettlementFor(updatedComp);
+    }
   };
 
   const handleModifyLadderSize = (ladderSize: number) => {
@@ -313,6 +415,33 @@ export function App() {
       return;
     }
 
+    // ADR-004 Hook Pipeline: Pre-offer evaluation (Velocity, AML, Market Integrity)
+    const hookEval = hookRegistry.evaluateBeforeOffer({
+      competition,
+      offerer: activeOfferer,
+      amount,
+      idempotencyKey,
+      offerId,
+      timestamp: currentTime,
+    });
+
+    if (!hookEval.allowed) {
+      const rejectedEvent: AuditEvent = {
+        id: `evt-reject-${Date.now()}-${Math.random()}`,
+        timestamp: currentTime,
+        offerId,
+        offererId: activeOfferer.offererId,
+        amount,
+        type: 'REJECTED',
+        reason: `${hookEval.code || 'HOOK_REJECTED'}: ${hookEval.reason || 'توسط نظارت هوک مسدود شد'}`,
+        transitions: [],
+        rankChanges: [],
+      };
+      setAuditEvents((prev) => [rejectedEvent, ...prev]);
+      setLastError(`${hookEval.code || 'مقررات نظارتی'}: ${hookEval.reason}`);
+      return;
+    }
+
     const clock = new FixedClock(currentTime);
     const isReplay = seenRecords.has(idempotencyKey);
 
@@ -333,6 +462,29 @@ export function App() {
       );
 
       setCompetition(result.competition);
+      setLastUpdatedOfferId(result.offer.offerId);
+
+      // Real-Time WebSocket Broadcast (Slice 3)
+      realtimeHub.broadcastLadderUpdate({
+        competitionId: result.competition.competitionId,
+        ladder: result.competition.ladder,
+        highestOffer: result.competition.highestOffer,
+        offerCount: result.competition.offerCount,
+        rankChanges: result.rankChanges,
+        transitions: result.transitions,
+        timestamp: currentTime.getTime(),
+      });
+      realtimeHub.broadcastOfferPlaced(result.offer, result.rank);
+
+      // ADR-004 Hook Pipeline: Post-offer dispatch
+      hookRegistry.dispatchAfterOffer({
+        competition: result.competition,
+        offer: result.offer,
+        rank: result.rank,
+        rankChanges: result.rankChanges,
+        transitions: result.transitions,
+        timestamp: currentTime,
+      });
 
       const newEvent: AuditEvent = {
         id: `evt-${Date.now()}-${Math.random()}`,
@@ -360,6 +512,18 @@ export function App() {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       const code = err instanceof CompetitionError ? (err as CompetitionError).code : 'ERROR';
+
+      // ADR-004 Hook Pipeline: Reject dispatch
+      hookRegistry.dispatchOnReject({
+        competition,
+        offerer: activeOfferer,
+        amount,
+        idempotencyKey,
+        offerId,
+        errorCode: code,
+        errorMessage: msg,
+        timestamp: currentTime,
+      });
 
       const rejectedEvent: AuditEvent = {
         id: `evt-reject-${Date.now()}-${Math.random()}`,
@@ -434,11 +598,16 @@ export function App() {
         onResetTime={handleResetTime}
         onOpenTests={() => setIsTestModalOpen(true)}
         onOpenDocs={() => setIsDocsModalOpen(true)}
+        onOpenAudit={() => setIsAuditModalOpen(true)}
         isOnline={isOnline}
         isSimulatingDisruption={isSimulatingDisruption}
         onToggleDisruption={() => resilienceManager.setSimulatedDisruption(!isSimulatingDisruption)}
         pendingQueueCount={pendingQueue.length}
         onOpenQueueModal={() => setIsResilienceModalOpen(true)}
+        wsStatus={wsStatus}
+        wsLatency={wsLatency}
+        onOpenSettlement={handleOpenSettlement}
+        hasSettlementStatement={Boolean(settlementStatement)}
       />
 
       {/* Market Modules Bar */}
@@ -454,6 +623,8 @@ export function App() {
           currentTime={currentTime}
           onChangeStatus={handleChangeStatus}
           onModifyLadderSize={handleModifyLadderSize}
+          onOpenSettlement={handleOpenSettlement}
+          hasSettlementStatement={Boolean(settlementStatement)}
         />
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -461,6 +632,7 @@ export function App() {
             <LadderView
               competition={competition}
               activeOffererId={activeOfferer.offererId}
+              lastUpdatedOfferId={lastUpdatedOfferId}
             />
           </div>
 
@@ -503,7 +675,7 @@ export function App() {
 
       <footer className="border-t border-slate-800 bg-slate-900/60 py-4 text-center text-xs text-slate-500">
         <p>
-          سامانه حراج و مبادلات ملی پاراندو (ParandO) &middot; اسلایس دوم: لایه API، بومی‌سازی فارسی و پایداری در شبکه ملی
+          سامانه حراج و مبادلات ملی پاراندو (ParandO) &middot; اسلایس چهارم و نهایی: معماری افزونه‌ها و هوک‌های نظارتی (ADR-004) و ممیزی بازپخش قطعی (Zero-Drift Replay) &bull; آماده تحویل (Production-Ready)
         </p>
       </footer>
 
@@ -527,6 +699,23 @@ export function App() {
         onToggleDisruption={() => resilienceManager.setSimulatedDisruption(!isSimulatingDisruption)}
         onFlushQueue={handleFlushQueue}
         onClearQueue={() => resilienceManager.clearQueue()}
+      />
+
+      <SettlementModal
+        isOpen={isSettlementModalOpen}
+        onClose={() => setIsSettlementModalOpen(false)}
+        statement={settlementStatement}
+        isFinalized={isSettlementFinalized}
+        onFinalizeSettlement={handleFinalizeSettlement}
+      />
+
+      <AuditComplianceModal
+        isOpen={isAuditModalOpen}
+        onClose={() => setIsAuditModalOpen(false)}
+        competition={competition}
+        marketModule={currentModule}
+        auditEvents={auditEvents}
+        proofs={proofs}
       />
     </div>
   );
