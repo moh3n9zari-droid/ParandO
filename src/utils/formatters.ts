@@ -1,28 +1,48 @@
-export function formatRial(amount: number): string {
-  return new Intl.NumberFormat('en-US').format(amount) + ' IRR';
+/**
+ * ابزارهای قالب‌بندی متون، اعداد و ارزهای سامانه ملی پاراندو (ریال و تومان)
+ */
+
+export function toPersianDigits(input: string | number): string {
+  const persianDigits = ['۰', '۱', '۲', '۳', '۴', '۵', '۶', '۷', '۸', '۹'];
+  return String(input).replace(/[0-9]/g, (w) => persianDigits[+w]);
 }
 
-export function formatToman(amount: number): string {
+export function formatRial(amount: number, usePersianDigits: boolean = true): string {
+  const formatted = new Intl.NumberFormat('en-US').format(amount);
+  const text = `${formatted} ریال`;
+  return usePersianDigits ? toPersianDigits(text) : text;
+}
+
+export function formatToman(amount: number, usePersianDigits: boolean = true): string {
   const toman = Math.floor(amount / 10);
-  return new Intl.NumberFormat('en-US').format(toman) + ' Toman';
+  const formatted = new Intl.NumberFormat('en-US').format(toman);
+  const text = `${formatted} تومان`;
+  return usePersianDigits ? toPersianDigits(text) : text;
 }
 
 export function formatDualCurrency(amount: number): { rial: string; toman: string } {
   return {
-    rial: formatRial(amount),
-    toman: formatToman(amount),
+    rial: formatRial(amount, true),
+    toman: formatToman(amount, true),
   };
 }
 
 export function formatTimestamp(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  return toPersianDigits(
+    date.toLocaleTimeString('fa-IR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  );
 }
 
 export function formatDuration(ms: number): string {
-  if (ms <= 0) return '00:00:00';
+  if (ms <= 0) return toPersianDigits('۰۰:۰۰:۰۰');
   const totalSecs = Math.floor(ms / 1000);
   const hours = Math.floor(totalSecs / 3600);
   const minutes = Math.floor((totalSecs % 3600) / 60);
   const seconds = totalSecs % 60;
-  return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  return toPersianDigits(timeStr);
 }

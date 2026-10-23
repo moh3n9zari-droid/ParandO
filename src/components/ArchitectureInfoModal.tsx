@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, X, BookOpen, Layers, CheckCircle2, Cpu } from 'lucide-react';
+import { BookOpen, Layers, ShieldCheck, Cpu, X, CheckCircle2 } from 'lucide-react';
 
 interface ArchitectureInfoModalProps {
   isOpen: boolean;
@@ -19,10 +19,10 @@ export const ArchitectureInfoModal: React.FC<ArchitectureInfoModalProps> = ({ is
             </div>
             <div>
               <h2 className="text-lg font-bold text-white">
-                Parando Architecture Highlights (ADR-001 &ndash; ADR-004)
+                Parando Architecture &amp; Core Kernel Conformance (Slice 1)
               </h2>
               <p className="text-xs text-slate-400">
-                Decoupled Domain Business Rules, Ports &amp; Adapters
+                ADR-001 &ndash; ADR-004 &middot; TR-01, TR-12, TR-13 Specifications
               </p>
             </div>
           </div>
@@ -36,60 +36,64 @@ export const ArchitectureInfoModal: React.FC<ArchitectureInfoModalProps> = ({ is
         </div>
 
         <div className="p-6 flex-1 overflow-y-auto space-y-6 text-sm text-slate-300">
-          {/* Section: ADR-001 */}
+          {/* TR-01 Vocabulary Conformance */}
           <div className="space-y-2">
             <div className="flex items-center space-x-2 text-amber-400 font-bold text-sm">
               <Layers className="w-4 h-4" />
-              <span>ADR-001: Clean Core Auction Kernel &amp; Ladder</span>
+              <span>TR-01: ADR-001 Vocabulary Conformance</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              Pure domain kernel isolated from databases, network, Redis, or frameworks. The kernel takes an immutable <code>Auction</code> state and a <code>SubmitBidCommand</code>, evaluates all invariants, and returns a new immutable state.
+              All domain entities are strictly aligned with ADR-001 domain terminology:
             </p>
-            <ul className="text-xs space-y-1.5 list-disc list-inside text-slate-300">
-              <li><strong>Ladder Ordering:</strong> 1. Amount (descending) &rarr; 2. Timestamp (earlier wins) &rarr; 3. Sequence (deterministic tie-breaker).</li>
-              <li><strong>One Position Per Bidder:</strong> Each bidder holds at most one spot on the ladder (their highest bid). Placing a higher bid supersedes their prior position.</li>
-              <li><strong>Top-K Retention:</strong> Only the top $K$ positions are maintained in memory; outbid bids transition to <code>OUTBID</code> status.</li>
-            </ul>
+            <div className="grid grid-cols-2 gap-2 text-xs font-mono">
+              <div className="p-2 rounded bg-slate-950/60 border border-slate-800">
+                <span className="text-slate-500 block">Competition &larr; Auction</span>
+                <span className="text-emerald-400">Competition, CompetitionRules, CompetitionStatus</span>
+              </div>
+              <div className="p-2 rounded bg-slate-950/60 border border-slate-800">
+                <span className="text-slate-500 block">Offer &larr; Bid</span>
+                <span className="text-emerald-400">Offer, Offerer, LadderOffer, SubmitOfferCommand</span>
+              </div>
+            </div>
           </div>
 
-          {/* Section: ADR-002 */}
+          {/* TR-13 Sequence Tie-Breaking */}
           <div className="space-y-2 pt-4 border-t border-slate-800">
             <div className="flex items-center space-x-2 text-sky-400 font-bold text-sm">
-              <ShieldCheck className="w-4 h-4" />
-              <span>ADR-002: Financial Ledger Contract &amp; CommitmentGuard</span>
+              <Cpu className="w-4 h-4" />
+              <span>TR-13: Equality &amp; Deterministic Tie-Breaking</span>
             </div>
             <p className="text-xs text-slate-400 leading-relaxed">
-              The financial kernel guarantees bidder solvency without blocking the auction hot path.
+              When multiple offers carry equal amounts, ranking is resolved strictly by <strong>Offer Sequence Number</strong> (lower/earlier sequence number wins) rather than system clock timestamp. This ensures 100% determinism independent of server clocks or network latency.
             </p>
+          </div>
+
+          {/* TR-12 Idempotency Behavior */}
+          <div className="space-y-2 pt-4 border-t border-slate-800">
+            <div className="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
+              <ShieldCheck className="w-4 h-4" />
+              <span>TR-12: Idempotent Replay vs. Conflict Behavior</span>
+            </div>
             <ul className="text-xs space-y-1.5 list-disc list-inside text-slate-300">
-              <li><strong>K-INV-7:</strong> Bidder exposure must never exceed their pre-authorized guaranteed amount.</li>
-              <li><strong>K-INV-14:</strong> The auction kernel never writes holds or ledger lines directly. It queries the <code>CommitmentGuard</code> port for a pre-published proof.</li>
-              <li><strong>Exposure Requirement:</strong> Fixed deposit rate (default 15% / 1,500 bps) calculated with ceiling integer arithmetic.</li>
+              <li><strong>Identical Payload:</strong> If a command with an existing <code>idempotency_key</code> matches the previous payload (same competition, offerer, amount, and offer ID), the kernel safely replays the previous <code>SubmitOfferResult</code> without re-executing or altering ladder state.</li>
+              <li><strong>Conflicting Payload:</strong> If the same <code>idempotency_key</code> is reused with altered payload attributes (e.g., different amount or different offerer), the kernel rejects the request with a strict <code>OFFER_CONFLICT</code> error.</li>
             </ul>
           </div>
 
-          {/* Section: Invariants */}
+          {/* Invariants */}
           <div className="space-y-2 pt-4 border-t border-slate-800">
-            <div className="flex items-center space-x-2 text-emerald-400 font-bold text-sm">
-              <Cpu className="w-4 h-4" />
-              <span>Domain Invariants &amp; Determinism</span>
+            <div className="flex items-center space-x-2 text-indigo-400 font-bold text-sm">
+              <CheckCircle2 className="w-4 h-4" />
+              <span>Domain Invariants (ADR-002 &amp; ADR-004)</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800">
-                <span className="font-mono font-bold text-slate-200 block">Integer Rial Only</span>
-                <span className="text-slate-400">Floating-point currency is strictly forbidden across kernels to prevent rounding drift.</span>
+                <span className="font-mono font-bold text-slate-200 block">K-INV-7 (Exposure Cap)</span>
+                <span className="text-slate-400">Offerer exposure must never exceed the guaranteed proof amount.</span>
               </div>
               <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800">
-                <span className="font-mono font-bold text-slate-200 block">Clock Port</span>
-                <span className="text-slate-400">Time is injected via a <code>Clock</code> port so the auction kernel remains 100% deterministic and testable.</span>
-              </div>
-              <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800">
-                <span className="font-mono font-bold text-slate-200 block">Tenant Isolation</span>
-                <span className="text-slate-400">Every bid, bidder, and proof must match the auction&apos;s <code>tenant_id</code>.</span>
-              </div>
-              <div className="p-3 bg-slate-950/60 rounded-lg border border-slate-800">
-                <span className="font-mono font-bold text-slate-200 block">Seller Conflict Prevention</span>
-                <span className="text-slate-400">The auction seller is strictly prohibited from bidding on their own auction.</span>
+                <span className="font-mono font-bold text-slate-200 block">K-INV-14 (Pure Port)</span>
+                <span className="text-slate-400">Kernel never writes holds directly; queries the CommitmentGuard port.</span>
               </div>
             </div>
           </div>

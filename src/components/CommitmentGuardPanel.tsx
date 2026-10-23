@@ -1,15 +1,15 @@
 import React from 'react';
-import { CommitmentProof, AuctionRules } from '../core/auction_kernel';
+import { CommitmentProof, CompetitionRules } from '../core/competition_kernel';
 import { formatDualCurrency } from '../utils/formatters';
-import { Shield, Plus, Clock, AlertCircle, CheckCircle2, FileText } from 'lucide-react';
+import { Shield, Plus, Clock, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 interface CommitmentGuardPanelProps {
   proofs: CommitmentProof[];
-  rules: AuctionRules;
+  rules: CompetitionRules;
   currentTime: Date;
-  onTopUp: (bidderId: string, amount: number) => void;
-  onExpireProof: (bidderId: string) => void;
-  onRestoreProof: (bidderId: string) => void;
+  onTopUp: (offererId: string, amount: number) => void;
+  onExpireProof: (offererId: string) => void;
+  onRestoreProof: (offererId: string) => void;
 }
 
 export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
@@ -47,13 +47,14 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
       {/* Proof Table */}
       <div className="flex-1 overflow-y-auto mt-3 space-y-2.5">
         {proofs.map((proof) => {
+          const offererId = proof.offererId || proof.bidderId || '';
           const isExpired = proof.validUntil.getTime() <= currentTime.getTime();
           const hasSufficient = proof.guaranteedAmount >= requiredExposure;
           const isValid = !isExpired && hasSufficient;
 
           return (
             <div
-              key={proof.bidderId}
+              key={offererId}
               className={`p-3 rounded-lg border text-xs font-mono transition ${
                 isValid
                   ? 'bg-slate-950/60 border-slate-800'
@@ -62,7 +63,7 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center space-x-2">
-                  <span className="font-bold text-white text-sm">{proof.bidderId}</span>
+                  <span className="font-bold text-white text-sm">{offererId}</span>
                   <span className="text-slate-400 text-[11px]">Tenant: {proof.tenantId}</span>
                 </div>
 
@@ -105,7 +106,7 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
               <div className="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-end space-x-2 text-[11px]">
                 <button
                   type="button"
-                  onClick={() => onTopUp(proof.bidderId, requiredExposure * 2)}
+                  onClick={() => onTopUp(offererId, requiredExposure * 2)}
                   className="px-2 py-1 rounded bg-slate-800 text-slate-200 hover:text-white hover:bg-slate-700 transition cursor-pointer flex items-center gap-1"
                 >
                   <Plus className="w-3 h-3 text-emerald-400" />
@@ -114,7 +115,7 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
                 {isExpired ? (
                   <button
                     type="button"
-                    onClick={() => onRestoreProof(proof.bidderId)}
+                    onClick={() => onRestoreProof(offererId)}
                     className="px-2 py-1 rounded bg-sky-500/20 text-sky-300 hover:bg-sky-500/30 transition cursor-pointer"
                   >
                     Extend +1h
@@ -122,7 +123,7 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
                 ) : (
                   <button
                     type="button"
-                    onClick={() => onExpireProof(proof.bidderId)}
+                    onClick={() => onExpireProof(offererId)}
                     className="px-2 py-1 rounded bg-red-500/10 text-red-300 hover:bg-red-500/20 transition cursor-pointer"
                   >
                     Expire Now
@@ -138,7 +139,7 @@ export const CommitmentGuardPanel: React.FC<CommitmentGuardPanelProps> = ({
       <div className="mt-4 pt-3 border-t border-slate-800 text-[11px] text-slate-400 space-y-1">
         <p className="flex items-center gap-1">
           <span className="font-mono text-amber-400 font-bold">K-INV-7:</span>
-          <span>Exposure must never exceed the guaranteed amount.</span>
+          <span>Offerer exposure must never exceed the guaranteed amount.</span>
         </p>
         <p className="flex items-center gap-1">
           <span className="font-mono text-sky-400 font-bold">K-INV-14:</span>

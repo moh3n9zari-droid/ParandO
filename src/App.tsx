@@ -1,15 +1,17 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
-  Auction,
-  AuctionRules,
-  AuctionStatus,
-  Bidder,
+  Competition,
+  CompetitionRules,
+  CompetitionStatus,
+  Offerer,
   CommitmentGuard,
   CommitmentProof,
   FixedClock,
-  submitBid,
-  AuctionError,
-} from './core/auction_kernel';
+  submitOffer,
+  CompetitionError,
+  SubmitOfferCommand,
+  SubmitOfferResult,
+} from './core/competition_kernel';
 import { MARKET_MODULES, MarketModuleConfig } from './data/market_modules';
 import { Navbar } from './components/Navbar';
 import { MarketSelector } from './components/MarketSelector';
@@ -20,115 +22,132 @@ import { TransitionsLog, AuditEvent } from './components/TransitionsLog';
 import { CommitmentGuardPanel } from './components/CommitmentGuardPanel';
 import { TestRunnerModal } from './components/TestRunnerModal';
 import { ArchitectureInfoModal } from './components/ArchitectureInfoModal';
-import { formatDualCurrency } from './utils/formatters';
+import { NetworkResilienceModal } from './components/NetworkResilienceModal';
+import { OfflineResilienceManager, ResilientOffer } from './services/resilienceQueue';
+import { formatDualCurrency, toPersianDigits } from './utils/formatters';
 
 export function App() {
-  // Current active market module
   const [currentModule, setCurrentModule] = useState<MarketModuleConfig>(MARKET_MODULES[0]);
 
-  // Clock state
+  // Simulation Clock
   const [currentTime, setCurrentTime] = useState<Date>(() => new Date());
   const [isClockRunning, setIsClockRunning] = useState<boolean>(true);
 
   // Modals state
   const [isTestModalOpen, setIsTestModalOpen] = useState<boolean>(false);
   const [isDocsModalOpen, setIsDocsModalOpen] = useState<boolean>(false);
+  const [isResilienceModalOpen, setIsResilienceModalOpen] = useState<boolean>(false);
 
-  // Initialize auction based on market module
-  const createInitialAuction = (mod: MarketModuleConfig, baseTime: Date) => {
-    const rules = new AuctionRules(mod.basePrice, mod.minIncrement, mod.depositRateBps);
-    return new Auction({
-      auctionId: `AUC-${mod.id.toUpperCase()}-001`,
+  // National Network Resilience Queue State
+  const resilienceManager = useMemo(() => OfflineResilienceManager.getInstance(), []);
+  const [pendingQueue, setPendingQueue] = useState<ResilientOffer[]>([]);
+  const [isSimulatingDisruption, setIsSimulatingDisruption] = useState<boolean>(false);
+  const isOnline = !isSimulatingDisruption;
+
+  useEffect(() => {
+    const unsub = resilienceManager.subscribe((q, isSim) => {
+      setPendingQueue(q);
+      setIsSimulatingDisruption(isSim);
+    });
+    return unsub;
+  }, [resilienceManager]);
+
+  // Initialize Competition based on Market Module (TR-01)
+  const createInitialCompetition = (mod: MarketModuleConfig, baseTime: Date) => {
+    const rules = new CompetitionRules(mod.basePrice, mod.minIncrement, mod.depositRateBps);
+    return new Competition({
+      competitionId: `COMP-${mod.id.toUpperCase()}-001`,
       tenantId: mod.tenantId,
       sellerId: mod.sellerId,
       rules,
-      startsAt: new Date(baseTime.getTime() - 10 * 60 * 1000), // started 10 mins ago
-      endsAt: new Date(baseTime.getTime() + mod.durationMinutes * 60 * 1000), // ends in N minutes
-      status: AuctionStatus.ACTIVE,
+      startsAt: new Date(baseTime.getTime() - 10 * 60 * 1000),
+      endsAt: new Date(baseTime.getTime() + mod.durationMinutes * 60 * 1000),
+      status: CompetitionStatus.ACTIVE,
       ladderSize: mod.ladderSize,
     });
   };
 
-  const [auction, setAuction] = useState<Auction>(() =>
-    createInitialAuction(MARKET_MODULES[0], currentTime)
+  const [competition, setCompetition] = useState<Competition>(() =>
+    createInitialCompetition(MARKET_MODULES[0], currentTime)
   );
 
-  // Bidders pool
-  const [bidders, setBidders] = useState<Bidder[]>([
-    { bidderId: 'bidder-alpha', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
-    { bidderId: 'bidder-beta', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
-    { bidderId: 'bidder-gamma', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
-    { bidderId: 'bidder-low-funds', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
-    { bidderId: 'bidder-foreign-tenant', tenantId: 'foreign-tenant-xyz', isEligible: true },
-    { bidderId: 'bidder-ineligible', tenantId: MARKET_MODULES[0].tenantId, isEligible: false },
-    { bidderId: MARKET_MODULES[0].sellerId, tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
+  // Offerers pool (TR-01)
+  const [offerers, setOfferers] = useState<Offerer[]>([
+    { offererId: 'offerer-alpha', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
+    { offererId: 'offerer-beta', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
+    { offererId: 'offerer-gamma', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
+    { offererId: 'offerer-low-funds', tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
+    { offererId: 'offerer-foreign-tenant', tenantId: 'foreign-tenant-xyz', isEligible: true },
+    { offererId: 'offerer-ineligible', tenantId: MARKET_MODULES[0].tenantId, isEligible: false },
+    { offererId: MARKET_MODULES[0].sellerId, tenantId: MARKET_MODULES[0].tenantId, isEligible: true },
   ]);
 
-  const [activeBidder, setActiveBidder] = useState<Bidder>(bidders[0]);
+  const [activeOfferer, setActiveOfferer] = useState<Offerer>(offerers[0]);
 
   // Commitment Proofs in Financial Ledger
   const [proofs, setProofs] = useState<CommitmentProof[]>([
     {
-      bidderId: 'bidder-alpha',
+      offererId: 'offerer-alpha',
       tenantId: MARKET_MODULES[0].tenantId,
       guaranteedAmount: 200_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: 'bidder-beta',
+      offererId: 'offerer-beta',
       tenantId: MARKET_MODULES[0].tenantId,
       guaranteedAmount: 250_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: 'bidder-gamma',
+      offererId: 'offerer-gamma',
       tenantId: MARKET_MODULES[0].tenantId,
       guaranteedAmount: 150_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: 'bidder-low-funds',
+      offererId: 'offerer-low-funds',
       tenantId: MARKET_MODULES[0].tenantId,
-      guaranteedAmount: 500_000, // Insufficient for required exposure
+      guaranteedAmount: 500_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: 'bidder-foreign-tenant',
+      offererId: 'offerer-foreign-tenant',
       tenantId: 'foreign-tenant-xyz',
       guaranteedAmount: 100_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: 'bidder-ineligible',
+      offererId: 'offerer-ineligible',
       tenantId: MARKET_MODULES[0].tenantId,
       guaranteedAmount: 100_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
     {
-      bidderId: MARKET_MODULES[0].sellerId,
+      offererId: MARKET_MODULES[0].sellerId,
       tenantId: MARKET_MODULES[0].tenantId,
       guaranteedAmount: 100_000_000_000,
       validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
     },
   ]);
 
-  // CommitmentGuard implementation
   const guard = useMemo<CommitmentGuard>(() => {
     return {
-      getProof(bidderId: string, tenantId: string): CommitmentProof | null {
-        const found = proofs.find((p) => p.bidderId === bidderId && p.tenantId === tenantId);
+      getProof(offererId: string, tenantId: string): CommitmentProof | null {
+        const found = proofs.find((p) => p.offererId === offererId && p.tenantId === tenantId);
         return found || null;
       },
     };
   }, [proofs]);
 
-  // Seen idempotency keys
-  const [seenKeys, setSeenKeys] = useState<Set<string>>(new Set());
+  // TR-12 Idempotency Store: key -> { command, result }
+  const [seenRecords, setSeenRecords] = useState<Map<string, { command: SubmitOfferCommand; result: SubmitOfferResult }>>(
+    new Map()
+  );
 
   // Audit Events
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
 
-  // Submission message feedback
+  // Submission messages feedback
   const [lastError, setLastError] = useState<string | null>(null);
   const [lastSuccess, setLastSuccess] = useState<string | null>(null);
 
@@ -141,76 +160,38 @@ export function App() {
     return () => clearInterval(interval);
   }, [isClockRunning]);
 
-  // Handle Market Module Switch
+  // Market Switch
   const handleSelectModule = (mod: MarketModuleConfig) => {
     setCurrentModule(mod);
-    const newAuction = createInitialAuction(mod, currentTime);
-    setAuction(newAuction);
+    const newComp = createInitialCompetition(mod, currentTime);
+    setCompetition(newComp);
 
-    // Update bidder tenant IDs for current market
-    const updatedBidders: Bidder[] = [
-      { bidderId: 'bidder-alpha', tenantId: mod.tenantId, isEligible: true },
-      { bidderId: 'bidder-beta', tenantId: mod.tenantId, isEligible: true },
-      { bidderId: 'bidder-gamma', tenantId: mod.tenantId, isEligible: true },
-      { bidderId: 'bidder-low-funds', tenantId: mod.tenantId, isEligible: true },
-      { bidderId: 'bidder-foreign-tenant', tenantId: 'foreign-tenant-xyz', isEligible: true },
-      { bidderId: 'bidder-ineligible', tenantId: mod.tenantId, isEligible: false },
-      { bidderId: mod.sellerId, tenantId: mod.tenantId, isEligible: true },
+    const updatedOfferers: Offerer[] = [
+      { offererId: 'offerer-alpha', tenantId: mod.tenantId, isEligible: true },
+      { offererId: 'offerer-beta', tenantId: mod.tenantId, isEligible: true },
+      { offererId: 'offerer-gamma', tenantId: mod.tenantId, isEligible: true },
+      { offererId: 'offerer-low-funds', tenantId: mod.tenantId, isEligible: true },
+      { offererId: 'offerer-foreign-tenant', tenantId: 'foreign-tenant-xyz', isEligible: true },
+      { offererId: 'offerer-ineligible', tenantId: mod.tenantId, isEligible: false },
+      { offererId: mod.sellerId, tenantId: mod.tenantId, isEligible: true },
     ];
-    setBidders(updatedBidders);
-    setActiveBidder(updatedBidders[0]);
+    setOfferers(updatedOfferers);
+    setActiveOfferer(updatedOfferers[0]);
 
-    // Update proofs
     const updatedProofs: CommitmentProof[] = [
-      {
-        bidderId: 'bidder-alpha',
-        tenantId: mod.tenantId,
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: 'bidder-beta',
-        tenantId: mod.tenantId,
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: 'bidder-gamma',
-        tenantId: mod.tenantId,
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: 'bidder-low-funds',
-        tenantId: mod.tenantId,
-        guaranteedAmount: 10_000,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: 'bidder-foreign-tenant',
-        tenantId: 'foreign-tenant-xyz',
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: 'bidder-ineligible',
-        tenantId: mod.tenantId,
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
-      {
-        bidderId: mod.sellerId,
-        tenantId: mod.tenantId,
-        guaranteedAmount: mod.basePrice * 2,
-        validUntil: new Date(currentTime.getTime() + 24 * 3600_000),
-      },
+      { offererId: 'offerer-alpha', tenantId: mod.tenantId, guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: 'offerer-beta', tenantId: mod.tenantId, guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: 'offerer-gamma', tenantId: mod.tenantId, guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: 'offerer-low-funds', tenantId: mod.tenantId, guaranteedAmount: 10_000, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: 'offerer-foreign-tenant', tenantId: 'foreign-tenant-xyz', guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: 'offerer-ineligible', tenantId: mod.tenantId, guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
+      { offererId: mod.sellerId, tenantId: mod.tenantId, guaranteedAmount: mod.basePrice * 2, validUntil: new Date(currentTime.getTime() + 24 * 3600_000) },
     ];
     setProofs(updatedProofs);
     setLastError(null);
-    setLastSuccess(`Switched to ${mod.name} module.`);
+    setLastSuccess(`بازار معاملاتی به «${mod.name}» تغییر یافت.`);
   };
 
-  // Clock manipulations
   const handleToggleClock = () => setIsClockRunning((prev) => !prev);
   const handleAdvanceTime = (seconds: number) => {
     setCurrentTime((prev) => new Date(prev.getTime() + seconds * 1000));
@@ -218,59 +199,56 @@ export function App() {
   const handleResetTime = () => {
     const fresh = new Date();
     setCurrentTime(fresh);
-    setAuction(createInitialAuction(currentModule, fresh));
+    setCompetition(createInitialCompetition(currentModule, fresh));
   };
 
-  // Status changes
-  const handleChangeStatus = (status: AuctionStatus) => {
-    setAuction(
-      new Auction({
-        auctionId: auction.auctionId,
-        tenantId: auction.tenantId,
-        sellerId: auction.sellerId,
-        rules: auction.rules,
-        startsAt: auction.startsAt,
-        endsAt: auction.endsAt,
+  const handleChangeStatus = (status: CompetitionStatus) => {
+    setCompetition(
+      new Competition({
+        competitionId: competition.competitionId,
+        tenantId: competition.tenantId,
+        sellerId: competition.sellerId,
+        rules: competition.rules,
+        startsAt: competition.startsAt,
+        endsAt: competition.endsAt,
         status,
-        version: auction.version,
-        highestBid: auction.highestBid,
-        bidCount: auction.bidCount,
-        ladderSize: auction.ladderSize,
-        ladder: auction.ladder,
+        version: competition.version,
+        highestOffer: competition.highestOffer,
+        offerCount: competition.offerCount,
+        ladderSize: competition.ladderSize,
+        ladder: competition.ladder,
       })
     );
   };
 
-  // Ladder size change
   const handleModifyLadderSize = (ladderSize: number) => {
     try {
-      setAuction(
-        new Auction({
-          auctionId: auction.auctionId,
-          tenantId: auction.tenantId,
-          sellerId: auction.sellerId,
-          rules: auction.rules,
-          startsAt: auction.startsAt,
-          endsAt: auction.endsAt,
-          status: auction.status,
-          version: auction.version,
-          highestBid: auction.highestBid,
-          bidCount: auction.bidCount,
+      setCompetition(
+        new Competition({
+          competitionId: competition.competitionId,
+          tenantId: competition.tenantId,
+          sellerId: competition.sellerId,
+          rules: competition.rules,
+          startsAt: competition.startsAt,
+          endsAt: competition.endsAt,
+          status: competition.status,
+          version: competition.version,
+          highestOffer: competition.highestOffer,
+          offerCount: competition.offerCount,
           ladderSize,
-          ladder: auction.ladder.slice(0, ladderSize),
+          ladder: competition.ladder.slice(0, ladderSize),
         })
       );
-      setLastSuccess(`Ladder capacity updated to Top-${ladderSize}`);
+      setLastSuccess(`ظرفیت نردبان رقابت به ${toPersianDigits(ladderSize)} جایگاه به‌روزرسانی شد.`);
     } catch (e: unknown) {
       setLastError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  // Proof top-up
-  const handleTopUpFunds = (bidderId: string, amount: number) => {
+  const handleTopUpFunds = (offererId: string, amount: number) => {
     setProofs((prev) =>
       prev.map((p) =>
-        p.bidderId === bidderId
+        p.offererId === offererId
           ? {
               ...p,
               guaranteedAmount: p.guaranteedAmount + amount,
@@ -279,92 +257,115 @@ export function App() {
           : p
       )
     );
-    setLastSuccess(`Funds pre-authorized for ${bidderId} (+${formatDualCurrency(amount).rial})`);
+    setLastSuccess(`سپرده تضمین برای ${offererId} با موفقیت افزایش یافت (+${formatDualCurrency(amount).rial})`);
   };
 
-  // Expire proof
-  const handleExpireProof = (bidderId: string) => {
+  const handleExpireProof = (offererId: string) => {
     setProofs((prev) =>
       prev.map((p) =>
-        p.bidderId === bidderId
+        p.offererId === offererId
           ? { ...p, validUntil: new Date(currentTime.getTime() - 60_000) }
           : p
       )
     );
-    setLastError(`Commitment proof expired for ${bidderId}`);
+    setLastError(`گواهی ضمانت مالی ${offererId} منقضی اعلام گردید.`);
   };
 
-  // Restore proof
-  const handleRestoreProof = (bidderId: string) => {
+  const handleRestoreProof = (offererId: string) => {
     setProofs((prev) =>
       prev.map((p) =>
-        p.bidderId === bidderId
+        p.offererId === offererId
           ? { ...p, validUntil: new Date(currentTime.getTime() + 3600_000) }
           : p
       )
     );
-    setLastSuccess(`Commitment proof extended for ${bidderId}`);
+    setLastSuccess(`گواهی اعتبار مالی ${offererId} به مدت ۱ ساعت تمدید شد.`);
   };
 
-  // Bid submission through pure kernel
-  const handleSubmitBid = (amount: number, expectedVersion?: number | null) => {
+  // Submit Offer through pure kernel with TR-01, TR-12, and TR-13, and National Network Resilience
+  const handleSubmitOffer = (
+    amount: number,
+    customIdempotencyKey?: string,
+    expectedVersion?: number | null
+  ) => {
     setLastError(null);
     setLastSuccess(null);
 
-    const bidId = `bid-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
-    const idempotencyKey = `idem-${bidId}`;
+    const idempotencyKey =
+      customIdempotencyKey ||
+      `idem-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const offerId = `offer-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+
+    // National Network Resilience Check: If offline / simulated disruption
+    if (!resilienceManager.isOnline()) {
+      resilienceManager.enqueue({
+        competitionId: competition.competitionId,
+        offererId: activeOfferer.offererId,
+        tenantId: activeOfferer.tenantId,
+        amount,
+        idempotencyKey,
+        expectedVersion,
+      });
+
+      setLastSuccess(
+        `پایداری شبکه ملی: به علت نوسان یا قطعی شبکه، پیشنهاد با مبلغ ${formatDualCurrency(amount).rial} در صف امن محلی ذخیره شد و به محض بازیابی ارتباط ارسال خواهد شد.`
+      );
+      return;
+    }
 
     const clock = new FixedClock(currentTime);
+    const isReplay = seenRecords.has(idempotencyKey);
 
     try {
-      const result = submitBid(
-        auction,
+      const result = submitOffer(
+        competition,
         {
-          auctionId: auction.auctionId,
-          bidder: activeBidder,
+          competitionId: competition.competitionId,
+          offerer: activeOfferer,
           amount,
-          bidId,
+          offerId,
           idempotencyKey,
           expectedVersion,
         },
         guard,
         clock,
-        seenKeys
+        seenRecords
       );
 
-      // Record seen idempotency key
-      setSeenKeys((prev) => new Set([...prev, idempotencyKey]));
+      setCompetition(result.competition);
 
-      // Update auction state
-      setAuction(result.auction);
-
-      // Record audit event
       const newEvent: AuditEvent = {
         id: `evt-${Date.now()}-${Math.random()}`,
         timestamp: currentTime,
-        bidId,
-        bidderId: activeBidder.bidderId,
+        offerId: result.offer.offerId,
+        offererId: activeOfferer.offererId,
         amount,
-        type: 'ACCEPTED',
+        type: isReplay ? 'REPLAY' : 'ACCEPTED',
         rank: result.rank,
         transitions: result.transitions,
         rankChanges: result.rankChanges,
       };
 
       setAuditEvents((prev) => [newEvent, ...prev]);
-      setLastSuccess(
-        `Bid accepted at Rank #${result.rank} (${formatDualCurrency(amount).rial})! Version bumped to v${result.auction.version}.`
-      );
+
+      if (isReplay) {
+        setLastSuccess(
+          `پاسخ تکرارپذیر TR-12: کلید «${idempotencyKey}» با مشخصات قبلی تطابق داشت؛ نتیجه قبلی (رتبه ${toPersianDigits(result.rank)}) بدون اجرای مجدد بازگردانده شد.`
+        );
+      } else {
+        setLastSuccess(
+          `پیشنهاد با موفقیت در رتبه ${toPersianDigits(result.rank)} ثبت شد (${formatDualCurrency(amount).rial})! توالی TR-13: شماره ${toPersianDigits(result.offer.sequence)}، نسخه v${toPersianDigits(result.competition.version)}.`
+        );
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      const code = err instanceof AuctionError ? (err as AuctionError).code : 'ERROR';
+      const code = err instanceof CompetitionError ? (err as CompetitionError).code : 'ERROR';
 
-      // Record rejection in audit log
       const rejectedEvent: AuditEvent = {
         id: `evt-reject-${Date.now()}-${Math.random()}`,
         timestamp: currentTime,
-        bidId,
-        bidderId: activeBidder.bidderId,
+        offerId,
+        offererId: activeOfferer.offererId,
         amount,
         type: 'REJECTED',
         reason: `${code}: ${msg}`,
@@ -377,8 +378,52 @@ export function App() {
     }
   };
 
+  // Flush pending offline resilience queue when back online
+  const handleFlushQueue = () => {
+    const queue = resilienceManager.getPendingQueue();
+    if (queue.length === 0) return;
+
+    let flushedCount = 0;
+    const clock = new FixedClock(currentTime);
+    let currentComp = competition;
+
+    for (const item of queue) {
+      try {
+        const off = offerers.find((o) => o.offererId === item.offererId) || {
+          offererId: item.offererId,
+          tenantId: item.tenantId,
+          isEligible: true,
+        };
+
+        const res = submitOffer(
+          currentComp,
+          {
+            competitionId: item.competitionId,
+            offerer: off,
+            amount: item.amount,
+            offerId: `offer-flushed-${Date.now()}`,
+            idempotencyKey: item.idempotencyKey,
+            expectedVersion: item.expectedVersion,
+          },
+          guard,
+          clock,
+          seenRecords
+        );
+
+        currentComp = res.competition;
+        resilienceManager.markSynced(item.queueId);
+        flushedCount += 1;
+      } catch (err: unknown) {
+        resilienceManager.markFailed(item.queueId, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    setCompetition(currentComp);
+    setLastSuccess(`همگام‌سازی شبکه ملی: تعداد ${toPersianDigits(flushedCount)} پیشنهاد معوق با موفقیت به هسته مرکزی منتقل شد.`);
+  };
+
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans" dir="rtl">
       {/* Top Navbar */}
       <Navbar
         currentModule={currentModule}
@@ -389,6 +434,11 @@ export function App() {
         onResetTime={handleResetTime}
         onOpenTests={() => setIsTestModalOpen(true)}
         onOpenDocs={() => setIsDocsModalOpen(true)}
+        isOnline={isOnline}
+        isSimulatingDisruption={isSimulatingDisruption}
+        onToggleDisruption={() => resilienceManager.setSimulatedDisruption(!isSimulatingDisruption)}
+        pendingQueueCount={pendingQueue.length}
+        onOpenQueueModal={() => setIsResilienceModalOpen(true)}
       />
 
       {/* Market Modules Bar */}
@@ -397,49 +447,44 @@ export function App() {
         onSelectModule={handleSelectModule}
       />
 
-      {/* Main Workspace */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
-        {/* Auction Summary & Parameters */}
         <AuctionHeader
-          auction={auction}
+          competition={competition}
           currentModule={currentModule}
           currentTime={currentTime}
           onChangeStatus={handleChangeStatus}
           onModifyLadderSize={handleModifyLadderSize}
         />
 
-        {/* 2-Column Grid: Ladder vs Bid Console */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Top-K Ladder View */}
           <div className="lg:col-span-6 flex flex-col">
             <LadderView
-              auction={auction}
-              activeBidderId={activeBidder.bidderId}
+              competition={competition}
+              activeOffererId={activeOfferer.offererId}
             />
           </div>
 
-          {/* Bid Submission Console */}
           <div className="lg:col-span-6 flex flex-col">
             <BidConsole
-              auction={auction}
-              bidders={bidders}
-              activeBidder={activeBidder}
-              onSelectBidder={setActiveBidder}
+              competition={competition}
+              offerers={offerers}
+              activeOfferer={activeOfferer}
+              onSelectOfferer={setActiveOfferer}
               guard={guard}
               onTopUpFunds={handleTopUpFunds}
-              onSubmitBid={handleSubmitBid}
+              onSubmitOffer={handleSubmitOffer}
               lastError={lastError}
               lastSuccess={lastSuccess}
+              isOnline={isOnline}
             />
           </div>
         </div>
 
-        {/* Lower Row: Financial Commitment Proofs & Transitions Log */}
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           <div className="lg:col-span-6 flex flex-col">
             <CommitmentGuardPanel
               proofs={proofs}
-              rules={auction.rules}
+              rules={competition.rules}
               currentTime={currentTime}
               onTopUp={handleTopUpFunds}
               onExpireProof={handleExpireProof}
@@ -456,10 +501,9 @@ export function App() {
         </div>
       </main>
 
-      {/* Footer */}
       <footer className="border-t border-slate-800 bg-slate-900/60 py-4 text-center text-xs text-slate-500">
         <p>
-          Parando Auction Ecosystem &middot; Clean Core Architecture &middot; ADR-001 through ADR-004
+          سامانه حراج و مبادلات ملی پاراندو (ParandO) &middot; اسلایس دوم: لایه API، بومی‌سازی فارسی و پایداری در شبکه ملی
         </p>
       </footer>
 
@@ -472,6 +516,17 @@ export function App() {
       <ArchitectureInfoModal
         isOpen={isDocsModalOpen}
         onClose={() => setIsDocsModalOpen(false)}
+      />
+
+      <NetworkResilienceModal
+        isOpen={isResilienceModalOpen}
+        onClose={() => setIsResilienceModalOpen(false)}
+        queue={pendingQueue}
+        isOnline={isOnline}
+        isSimulatingDisruption={isSimulatingDisruption}
+        onToggleDisruption={() => resilienceManager.setSimulatedDisruption(!isSimulatingDisruption)}
+        onFlushQueue={handleFlushQueue}
+        onClearQueue={() => resilienceManager.clearQueue()}
       />
     </div>
   );

@@ -1,32 +1,31 @@
 import {
-  AuctionLadder,
-  LadderBid,
-  LadderBidStatus,
+  CompetitionLadder,
+  LadderOffer,
+  LadderOfferStatus,
   LadderError,
-} from './auction_ladder';
+  IdempotencyConflict,
+} from './competition_ladder';
 import {
-  Auction,
-  AuctionEnded,
-  AuctionNotActive,
-  AuctionNotStarted,
-  AuctionRules,
-  AuctionStatus,
-  Bid,
-  BidBelowMinimum,
-  Bidder,
-  BidderNotEligible,
-  BidIncrementTooSmall,
+  Competition,
+  CompetitionEnded,
+  CompetitionNotActive,
+  CompetitionNotStarted,
+  CompetitionRules,
+  CompetitionStatus,
+  OfferBelowMinimum,
+  Offerer,
+  OffererNotEligible,
+  OfferIncrementTooSmall,
   CommitmentGuard,
   CommitmentProof,
-  DuplicateBid,
   FixedClock,
   InsufficientCommitment,
-  InvalidAmount,
-  SellerCannotBid,
-  StaleAuctionVersion,
-  SubmitBidCommand,
-  submitBid,
-} from './auction_kernel';
+  SellerCannotOffer,
+  StaleCompetitionVersion,
+  SubmitOfferCommand,
+  submitOffer,
+  OfferConflict,
+} from './competition_kernel';
 
 export interface TestResult {
   name: string;
@@ -44,8 +43,8 @@ export class FakeGuard implements CommitmentGuard {
     this.proof = proof;
   }
 
-  getProof(bidderId: string, tenantId: string): CommitmentProof | null {
-    this.calls.push([bidderId, tenantId]);
+  getProof(offererId: string, tenantId: string): CommitmentProof | null {
+    this.calls.push([offererId, tenantId]);
     return this.proof;
   }
 }
@@ -57,22 +56,22 @@ export function runAllCoreTests(): TestResult[] {
   const STEP = 50_000;
   const REQUIRED = 150_000;
 
-  function makeAuction(overrides: Partial<ConstructorParameters<typeof Auction>[0]> = {}): Auction {
-    return new Auction({
-      auctionId: 'A1',
+  function makeCompetition(overrides: Partial<ConstructorParameters<typeof Competition>[0]> = {}): Competition {
+    return new Competition({
+      competitionId: 'C1',
       tenantId: 'T1',
       sellerId: 'seller',
-      rules: new AuctionRules(BASE_PRICE, STEP),
+      rules: new CompetitionRules(BASE_PRICE, STEP),
       startsAt: new Date(NOW.getTime() - 3600_000),
       endsAt: new Date(NOW.getTime() + 3600_000),
-      status: AuctionStatus.ACTIVE,
+      status: CompetitionStatus.ACTIVE,
       ...overrides,
     });
   }
 
-  function makeBidder(overrides: Partial<Bidder> = {}): Bidder {
+  function makeOfferer(overrides: Partial<Offerer> = {}): Offerer {
     return {
-      bidderId: 'b1',
+      offererId: 'o1',
       tenantId: 'T1',
       isEligible: true,
       ...overrides,
@@ -81,7 +80,7 @@ export function runAllCoreTests(): TestResult[] {
 
   function makeProof(overrides: Partial<CommitmentProof> = {}): CommitmentProof {
     return {
-      bidderId: 'b1',
+      offererId: 'o1',
       tenantId: 'T1',
       guaranteedAmount: REQUIRED,
       validUntil: new Date(NOW.getTime() + 1800_000),
@@ -89,12 +88,12 @@ export function runAllCoreTests(): TestResult[] {
     };
   }
 
-  function makeCommand(overrides: Partial<SubmitBidCommand> = {}): SubmitBidCommand {
+  function makeCommand(overrides: Partial<SubmitOfferCommand> = {}): SubmitOfferCommand {
     return {
-      auctionId: 'A1',
-      bidder: makeBidder(),
+      competitionId: 'C1',
+      offerer: makeOfferer(),
       amount: BASE_PRICE,
-      bidId: 'bid-1',
+      offerId: 'offer-1',
       idempotencyKey: 'idem-1',
       ...overrides,
     };
@@ -122,28 +121,27 @@ export function runAllCoreTests(): TestResult[] {
   }
 
   // --- Ladder Unit Tests ---
-  runTest('AuctionLadder: invalid K throws INVALID_K', 'Ladder', () => {
+  runTest('TR-01 / Ladder: invalid K throws INVALID_K', 'Ladder', () => {
     try {
-      new AuctionLadder(0);
+      new CompetitionLadder(0);
       throw new Error('Expected INVALID_K');
     } catch (e: unknown) {
       if (!(e instanceof LadderError) || e.code !== 'INVALID_K') throw e;
     }
   });
 
-  runTest('AuctionLadder: invalid bid fields throw specific LadderErrors', 'Ladder', () => {
-    const ladder = new AuctionLadder(3);
-    const badBids: [LadderBid, string][] = [
-      [{ bidId: '', bidderId: 'u', amount: 10, timestamp: 1 }, 'INVALID_BID'],
-      [{ bidId: 'x', bidderId: '', amount: 10, timestamp: 1 }, 'INVALID_BID'],
-      [{ bidId: 'x', bidderId: 'u', amount: 0, timestamp: 1 }, 'INVALID_AMOUNT'],
-      [{ bidId: 'x', bidderId: 'u', amount: -5, timestamp: 1 }, 'INVALID_AMOUNT'],
-      [{ bidId: 'x', bidderId: 'u', amount: 10, timestamp: -1 }, 'INVALID_TIMESTAMP'],
+  runTest('TR-01 / Ladder: invalid offer fields throw specific LadderErrors', 'Ladder', () => {
+    const ladder = new CompetitionLadder(3);
+    const badOffers: [LadderOffer, string][] = [
+      [{ offerId: '', offererId: 'u', amount: 10, sequence: 1 }, 'INVALID_BID'],
+      [{ offerId: 'x', offererId: '', amount: 10, sequence: 1 }, 'INVALID_BID'],
+      [{ offerId: 'x', offererId: 'u', amount: 0, sequence: 1 }, 'INVALID_AMOUNT'],
+      [{ offerId: 'x', offererId: 'u', amount: -5, sequence: 1 }, 'INVALID_AMOUNT'],
     ];
 
-    for (const [bid, code] of badBids) {
+    for (const [offer, code] of badOffers) {
       try {
-        ladder.place(bid);
+        ladder.place(offer);
         throw new Error(`Expected ${code}`);
       } catch (e: unknown) {
         if (!(e instanceof LadderError) || e.code !== code) throw e;
@@ -151,248 +149,255 @@ export function runAllCoreTests(): TestResult[] {
     }
   });
 
-  runTest('AuctionLadder: sorts by amount desc', 'Ladder', () => {
-    const l = new AuctionLadder(3);
-    l.place({ bidId: 'b1', bidderId: 'u1', amount: 100, timestamp: 1 });
-    l.place({ bidId: 'b2', bidderId: 'u2', amount: 300, timestamp: 2 });
-    l.place({ bidId: 'b3', bidderId: 'u3', amount: 200, timestamp: 3 });
-    const ids = l.snapshot().map((e) => e.bid.bidId);
-    if (JSON.stringify(ids) !== JSON.stringify(['b2', 'b3', 'b1'])) {
+  runTest('TR-01 / Ladder: sorts by amount desc', 'Ladder', () => {
+    const l = new CompetitionLadder(3);
+    l.place({ offerId: 'o1', offererId: 'u1', amount: 100, sequence: 1 });
+    l.place({ offerId: 'o2', offererId: 'u2', amount: 300, sequence: 2 });
+    l.place({ offerId: 'o3', offererId: 'u3', amount: 200, sequence: 3 });
+    const ids = l.snapshot().map((e) => e.offer.offerId);
+    if (JSON.stringify(ids) !== JSON.stringify(['o2', 'o3', 'o1'])) {
       throw new Error(`Order mismatch: ${ids.join(', ')}`);
     }
-    if (l.rankOf('b3') !== 2) throw new Error('Rank of b3 must be 2');
+    if (l.rankOf('o3') !== 2) throw new Error('Rank of o3 must be 2');
   });
 
-  runTest('AuctionLadder: earlier timestamp wins on tie', 'Ladder', () => {
-    const l = new AuctionLadder(3);
-    l.place({ bidId: 'late', bidderId: 'u1', amount: 100, timestamp: 20 });
-    l.place({ bidId: 'early', bidderId: 'u2', amount: 100, timestamp: 10 });
-    const ids = l.snapshot().map((e) => e.bid.bidId);
-    if (JSON.stringify(ids) !== JSON.stringify(['early', 'late'])) {
-      throw new Error(`Tie-breaker failed: ${ids.join(', ')}`);
+  runTest('TR-13: equal amount tie-break strictly by Offer Sequence Number', 'Ladder', () => {
+    const l = new CompetitionLadder(3);
+    // Sequence 1 was submitted earlier than Sequence 2
+    l.place({ offerId: 'seq2', offererId: 'u2', amount: 100, sequence: 2 });
+    l.place({ offerId: 'seq1', offererId: 'u1', amount: 100, sequence: 1 });
+    const ids = l.snapshot().map((e) => e.offer.offerId);
+    if (JSON.stringify(ids) !== JSON.stringify(['seq1', 'seq2'])) {
+      throw new Error(`TR-13 sequence tie-breaker failed: expected seq1 first, got ${ids.join(', ')}`);
     }
   });
 
-  runTest('AuctionLadder: full ladder drops worst and marks OUTBID', 'Ladder', () => {
-    const l = new AuctionLadder(2);
-    l.place({ bidId: 'b1', bidderId: 'u1', amount: 100, timestamp: 1 });
-    l.place({ bidId: 'b2', bidderId: 'u2', amount: 200, timestamp: 2 });
-    const r = l.place({ bidId: 'b3', bidderId: 'u3', amount: 150, timestamp: 3 });
-    if (!r.accepted || r.rank !== 2) throw new Error('Bid b3 should rank at 2');
-    if (r.transitions.length !== 1 || r.transitions[0].bidId !== 'b1' || r.transitions[0].newStatus !== LadderBidStatus.OUTBID) {
-      throw new Error('Expected b1 outbid transition');
+  runTest('TR-12 / Ladder: identical payload replays, conflicting payload throws IdempotencyConflict', 'Ladder', () => {
+    const l = new CompetitionLadder(3);
+    const r1 = l.place({ offerId: 'dup1', offererId: 'u1', amount: 100, sequence: 1 });
+    const r2 = l.place({ offerId: 'dup1', offererId: 'u1', amount: 100, sequence: 1 });
+    if (!r2.duplicate || r2.rank !== 1) throw new Error('Expected duplicate replay');
+
+    try {
+      l.place({ offerId: 'dup1', offererId: 'u1', amount: 200, sequence: 1 });
+      throw new Error('Expected conflict error');
+    } catch (e: unknown) {
+      if (!(e instanceof IdempotencyConflict)) throw e;
     }
-    if (l.statusOf('b1') !== LadderBidStatus.OUTBID) throw new Error('Status of b1 must be OUTBID');
   });
 
-  runTest('AuctionLadder: same bidder higher bid SUPERSEDES previous', 'Ladder', () => {
-    const l = new AuctionLadder(3);
-    l.place({ bidId: 'b1', bidderId: 'u1', amount: 100, timestamp: 1 });
-    l.place({ bidId: 'b2', bidderId: 'u2', amount: 150, timestamp: 2 });
-    const r = l.place({ bidId: 'b3', bidderId: 'u1', amount: 200, timestamp: 3 });
-    if (!r.accepted || r.rank !== 1) throw new Error('Bid b3 should rank at 1');
-    if (l.statusOf('b1') !== LadderBidStatus.SUPERSEDED) throw new Error('b1 must be SUPERSEDED');
-    const ids = l.snapshot().map((e) => e.bid.bidId);
-    if (JSON.stringify(ids) !== JSON.stringify(['b3', 'b2'])) throw new Error(`Snapshot mismatch: ${ids.join(',')}`);
+  runTest('TR-01 / Ladder: full ladder drops worst and marks OUTBID', 'Ladder', () => {
+    const l = new CompetitionLadder(2);
+    l.place({ offerId: 'o1', offererId: 'u1', amount: 100, sequence: 1 });
+    l.place({ offerId: 'o2', offererId: 'u2', amount: 200, sequence: 2 });
+    const r = l.place({ offerId: 'o3', offererId: 'u3', amount: 150, sequence: 3 });
+    if (!r.accepted || r.rank !== 2) throw new Error('Offer o3 should rank at 2');
+    if (r.transitions.length !== 1 || r.transitions[0].offerId !== 'o1' || r.transitions[0].newStatus !== LadderOfferStatus.OUTBID) {
+      throw new Error('Expected o1 outbid transition');
+    }
+    if (l.statusOf('o1') !== LadderOfferStatus.OUTBID) throw new Error('Status of o1 must be OUTBID');
   });
 
-  runTest('AuctionLadder: same bidder lower or equal rejected with NOT_HIGHER_THAN_OWN_BID', 'Ladder', () => {
-    const l = new AuctionLadder(3);
-    l.place({ bidId: 'b1', bidderId: 'u1', amount: 100, timestamp: 1 });
-    const r1 = l.place({ bidId: 'b2', bidderId: 'u1', amount: 100, timestamp: 2 });
-    const r2 = l.place({ bidId: 'b3', bidderId: 'u1', amount: 50, timestamp: 2 });
-    if (r1.accepted || r1.reason !== 'NOT_HIGHER_THAN_OWN_BID') throw new Error('r1 should be rejected');
-    if (r2.accepted || r2.reason !== 'NOT_HIGHER_THAN_OWN_BID') throw new Error('r2 should be rejected');
+  runTest('TR-01 / Ladder: same offerer higher offer SUPERSEDES previous', 'Ladder', () => {
+    const l = new CompetitionLadder(3);
+    l.place({ offerId: 'o1', offererId: 'u1', amount: 100, sequence: 1 });
+    l.place({ offerId: 'o2', offererId: 'u2', amount: 150, sequence: 2 });
+    const r = l.place({ offerId: 'o3', offererId: 'u1', amount: 200, sequence: 3 });
+    if (!r.accepted || r.rank !== 1) throw new Error('Offer o3 should rank at 1');
+    if (l.statusOf('o1') !== LadderOfferStatus.SUPERSEDED) throw new Error('o1 must be SUPERSEDED');
+    const ids = l.snapshot().map((e) => e.offer.offerId);
+    if (JSON.stringify(ids) !== JSON.stringify(['o3', 'o2'])) throw new Error(`Snapshot mismatch: ${ids.join(',')}`);
   });
 
   // --- Kernel Unit Tests ---
-  runTest('AuctionKernel: first bid at base price is accepted', 'Kernel', () => {
-    const auction = makeAuction();
+  runTest('TR-01 / Kernel: first offer at base price is accepted', 'Kernel', () => {
+    const competition = makeCompetition();
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
-    const result = submitBid(auction, makeCommand(), guard, clock);
-    if (result.bid.amount !== BASE_PRICE) throw new Error('Amount mismatch');
-    if (result.bid.sequence !== 1) throw new Error('Sequence should be 1');
-    if (result.auction.bidCount !== 1) throw new Error('Bid count should be 1');
-    if (result.auction.version !== 1) throw new Error('Version should be 1');
+    const result = submitOffer(competition, makeCommand(), guard, clock);
+    if (result.offer.amount !== BASE_PRICE) throw new Error('Amount mismatch');
+    if (result.offer.sequence !== 1) throw new Error('Sequence should be 1');
+    if (result.competition.offerCount !== 1) throw new Error('Offer count should be 1');
+    if (result.competition.version !== 1) throw new Error('Version should be 1');
   });
 
-  runTest('AuctionKernel: bid below minimum rejected', 'Kernel', () => {
-    const auction = makeAuction();
+  runTest('TR-12 / Kernel: identical payload returns previous response (Idempotent Replay)', 'Kernel', () => {
+    const competition = makeCompetition();
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
+    const seen = new Map();
+    const cmd = makeCommand();
+    const r1 = submitOffer(competition, cmd, guard, clock, seen);
+    const r2 = submitOffer(competition, cmd, guard, clock, seen);
+    if (r1 !== r2) throw new Error('Expected identical response reference on idempotent replay');
+    if (r2.offer.offerId !== cmd.offerId) throw new Error('Offer ID mismatch');
+  });
+
+  runTest('TR-12 / Kernel: conflicting payload for same key raises OfferConflict', 'Kernel', () => {
+    const competition = makeCompetition();
+    const guard = new FakeGuard(makeProof({ guaranteedAmount: REQUIRED * 5 }));
+    const clock = new FixedClock(NOW);
+    const seen = new Map();
+    const cmd1 = makeCommand({ amount: BASE_PRICE });
+    submitOffer(competition, cmd1, guard, clock, seen);
+
     try {
-      submitBid(auction, makeCommand({ amount: BASE_PRICE - 1 }), guard, clock);
-      throw new Error('Should have failed');
+      const cmd2 = makeCommand({ amount: BASE_PRICE + STEP });
+      submitOffer(competition, cmd2, guard, clock, seen);
+      throw new Error('Should have raised OfferConflict');
     } catch (e: unknown) {
-      if (!(e instanceof BidBelowMinimum)) throw e;
+      if (!(e instanceof OfferConflict)) throw e;
     }
   });
 
-  runTest('AuctionKernel: bid increment too small rejected', 'Kernel', () => {
-    const auction = makeAuction();
-    const guard = new FakeGuard(makeProof());
-    const clock = new FixedClock(NOW);
-    const r1 = submitBid(auction, makeCommand({ amount: BASE_PRICE }), guard, clock);
-    try {
-      submitBid(r1.auction, makeCommand({ bidId: 'bid-2', idempotencyKey: 'idem-2', amount: BASE_PRICE + 10 }), guard, clock);
-      throw new Error('Should have failed');
-    } catch (e: unknown) {
-      if (!(e instanceof BidIncrementTooSmall)) throw e;
-    }
-  });
-
-  runTest('AuctionKernel: seller cannot bid', 'Kernel', () => {
-    const auction = makeAuction();
+  runTest('TR-01 / Kernel: offer below minimum rejected', 'Kernel', () => {
+    const competition = makeCompetition();
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
     try {
-      submitBid(auction, makeCommand({ bidder: makeBidder({ bidderId: 'seller' }) }), guard, clock);
+      submitOffer(competition, makeCommand({ amount: BASE_PRICE - 1 }), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof SellerCannotBid)) throw e;
+      if (!(e instanceof OfferBelowMinimum)) throw e;
     }
   });
 
-  runTest('AuctionKernel: ineligible bidder rejected', 'Kernel', () => {
-    const auction = makeAuction();
+  runTest('TR-01 / Kernel: offer increment too small rejected', 'Kernel', () => {
+    const competition = makeCompetition();
+    const guard = new FakeGuard(makeProof());
+    const clock = new FixedClock(NOW);
+    const r1 = submitOffer(competition, makeCommand({ amount: BASE_PRICE }), guard, clock);
+    try {
+      submitOffer(r1.competition, makeCommand({ offerId: 'offer-2', idempotencyKey: 'idem-2', amount: BASE_PRICE + 10 }), guard, clock);
+      throw new Error('Should have failed');
+    } catch (e: unknown) {
+      if (!(e instanceof OfferIncrementTooSmall)) throw e;
+    }
+  });
+
+  runTest('TR-01 / Kernel: seller cannot offer', 'Kernel', () => {
+    const competition = makeCompetition();
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
     try {
-      submitBid(auction, makeCommand({ bidder: makeBidder({ isEligible: false }) }), guard, clock);
+      submitOffer(competition, makeCommand({ offerer: makeOfferer({ offererId: 'seller' }) }), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof BidderNotEligible)) throw e;
+      if (!(e instanceof SellerCannotOffer)) throw e;
     }
   });
 
-  runTest('AuctionKernel: insufficient commitment proof rejected', 'Kernel', () => {
-    const auction = makeAuction();
+  runTest('TR-01 / Kernel: ineligible offerer rejected', 'Kernel', () => {
+    const competition = makeCompetition();
+    const guard = new FakeGuard(makeProof());
+    const clock = new FixedClock(NOW);
+    try {
+      submitOffer(competition, makeCommand({ offerer: makeOfferer({ isEligible: false }) }), guard, clock);
+      throw new Error('Should have failed');
+    } catch (e: unknown) {
+      if (!(e instanceof OffererNotEligible)) throw e;
+    }
+  });
+
+  runTest('TR-01 / Kernel: insufficient commitment proof rejected', 'Kernel', () => {
+    const competition = makeCompetition();
     const guard = new FakeGuard(makeProof({ guaranteedAmount: REQUIRED - 1 }));
     const clock = new FixedClock(NOW);
     try {
-      submitBid(auction, makeCommand(), guard, clock);
+      submitOffer(competition, makeCommand(), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
       if (!(e instanceof InsufficientCommitment)) throw e;
     }
   });
 
-  runTest('AuctionKernel: duplicate idempotency key rejected', 'Kernel', () => {
-    const auction = makeAuction();
-    const guard = new FakeGuard(makeProof());
-    const clock = new FixedClock(NOW);
-    const seen = new Set(['idem-1']);
-    try {
-      submitBid(auction, makeCommand({ idempotencyKey: 'idem-1' }), guard, clock, seen);
-      throw new Error('Should have failed');
-    } catch (e: unknown) {
-      if (!(e instanceof DuplicateBid)) throw e;
-    }
-  });
-
-  runTest('AuctionKernel: stale auction version rejected', 'Kernel', () => {
-    const auction = makeAuction({ version: 2 });
+  runTest('TR-01 / Kernel: stale competition version rejected', 'Kernel', () => {
+    const competition = makeCompetition({ version: 2 });
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
     try {
-      submitBid(auction, makeCommand({ expectedVersion: 1 }), guard, clock);
+      submitOffer(competition, makeCommand({ expectedVersion: 1 }), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof StaleAuctionVersion)) throw e;
+      if (!(e instanceof StaleCompetitionVersion)) throw e;
     }
   });
 
-  runTest('AuctionKernel: inactive/expired auction rejected', 'Kernel', () => {
+  runTest('TR-01 / Kernel: inactive or expired competition rejected', 'Kernel', () => {
     const guard = new FakeGuard(makeProof());
     const clock = new FixedClock(NOW);
     try {
-      submitBid(makeAuction({ status: AuctionStatus.SCHEDULED }), makeCommand(), guard, clock);
+      submitOffer(makeCompetition({ status: CompetitionStatus.SCHEDULED }), makeCommand(), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof AuctionNotActive)) throw e;
+      if (!(e instanceof CompetitionNotActive)) throw e;
     }
 
     try {
-      submitBid(makeAuction({ startsAt: new Date(NOW.getTime() + 1000) }), makeCommand(), guard, clock);
+      submitOffer(makeCompetition({ startsAt: new Date(NOW.getTime() + 1000) }), makeCommand(), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof AuctionNotStarted)) throw e;
+      if (!(e instanceof CompetitionNotStarted)) throw e;
     }
 
     try {
-      submitBid(makeAuction({ endsAt: new Date(NOW.getTime() - 1000) }), makeCommand(), guard, clock);
+      submitOffer(makeCompetition({ endsAt: new Date(NOW.getTime() - 1000) }), makeCommand(), guard, clock);
       throw new Error('Should have failed');
     } catch (e: unknown) {
-      if (!(e instanceof AuctionEnded)) throw e;
+      if (!(e instanceof CompetitionEnded)) throw e;
     }
   });
 
-  // --- Integration Tests (test_kernel_ladder_integration.py) ---
+  // --- Integration Tests ---
   runTest('Integration: ladder keeps top-K highest first', 'Integration', () => {
-    let a = makeAuction({ ladderSize: 3 });
+    let c = makeCompetition({ ladderSize: 3 });
     const clock = new FixedClock(NOW);
     for (let i = 0; i < 5; i++) {
-      const bidderId = `b${i}`;
-      const guard = new FakeGuard(makeProof({ bidderId }));
+      const offererId = `o${i}`;
+      const guard = new FakeGuard(makeProof({ offererId, guaranteedAmount: BASE_PRICE * 10 }));
       const cmd = makeCommand({
-        bidder: makeBidder({ bidderId }),
+        offerer: makeOfferer({ offererId }),
         amount: BASE_PRICE + i * STEP,
-        bidId: `x${i}`,
+        offerId: `x${i}`,
         idempotencyKey: `k-x${i}`,
       });
-      a = submitBid(a, cmd, guard, clock).auction;
+      c = submitOffer(c, cmd, guard, clock).competition;
     }
-    const ladderIds = a.ladder.map((b) => b.bidId);
+    const ladderIds = c.ladder.map((o) => o.offerId);
     if (JSON.stringify(ladderIds) !== JSON.stringify(['x4', 'x3', 'x2'])) {
       throw new Error(`Ladder top-3 mismatch: ${ladderIds.join(',')}`);
     }
-    if (a.highestBid?.bidId !== 'x4' || a.bidCount !== 5) {
-      throw new Error('Leader or bid count mismatch');
+    if (c.highestOffer?.offerId !== 'x4' || c.offerCount !== 5) {
+      throw new Error('Leader or offer count mismatch');
     }
   });
 
   runTest('Integration: outbid transition reported on ladder drop', 'Integration', () => {
-    let a = makeAuction({ ladderSize: 2 });
+    let c = makeCompetition({ ladderSize: 2 });
     const clock = new FixedClock(NOW);
-    const placeBid = (bidderId: string, amt: number, bidId: string) => {
-      const guard = new FakeGuard(makeProof({ bidderId }));
+    const placeOffer = (offererId: string, amt: number, offerId: string) => {
+      const guard = new FakeGuard(makeProof({ offererId, guaranteedAmount: BASE_PRICE * 10 }));
       const cmd = makeCommand({
-        bidder: makeBidder({ bidderId }),
+        offerer: makeOfferer({ offererId }),
         amount: amt,
-        bidId,
-        idempotencyKey: `k-${bidId}`,
+        offerId,
+        idempotencyKey: `k-${offerId}`,
       });
-      return submitBid(a, cmd, guard, clock);
+      return submitOffer(c, cmd, guard, clock);
     };
 
-    a = placeBid('b0', BASE_PRICE, 'x0').auction;
-    a = placeBid('b1', BASE_PRICE + STEP, 'x1').auction;
-    const r = placeBid('b2', BASE_PRICE + 2 * STEP, 'x2');
+    c = placeOffer('o0', BASE_PRICE, 'x0').competition;
+    c = placeOffer('o1', BASE_PRICE + STEP, 'x1').competition;
+    const r = placeOffer('o2', BASE_PRICE + 2 * STEP, 'x2');
 
-    const outbidList = r.transitions.map((t) => [t.bidId, t.newStatus]);
-    if (JSON.stringify(outbidList) !== JSON.stringify([['x0', LadderBidStatus.OUTBID]])) {
+    const outbidList = r.transitions.map((t) => [t.offerId, t.newStatus]);
+    if (JSON.stringify(outbidList) !== JSON.stringify([['x0', LadderOfferStatus.OUTBID]])) {
       throw new Error(`Transition mismatch: ${JSON.stringify(outbidList)}`);
     }
     if (r.rank !== 1) throw new Error('Rank should be 1');
-    const ladderIds = r.auction.ladder.map((b) => b.bidId);
+    const ladderIds = r.competition.ladder.map((o) => o.offerId);
     if (JSON.stringify(ladderIds) !== JSON.stringify(['x2', 'x1'])) {
       throw new Error(`Ladder mismatch: ${ladderIds.join(',')}`);
-    }
-  });
-
-  runTest('Integration: input auction is strictly immutable', 'Integration', () => {
-    const a = makeAuction({ ladderSize: 2 });
-    const guard = new FakeGuard(makeProof({ bidderId: 'b0' }));
-    const cmd = makeCommand({
-      bidder: makeBidder({ bidderId: 'b0' }),
-      amount: BASE_PRICE,
-      bidId: 'x0',
-      idempotencyKey: 'k-x0',
-    });
-    submitBid(a, cmd, guard, new FixedClock(NOW));
-    if (a.ladder.length !== 0 || a.highestBid !== null) {
-      throw new Error('Original auction was mutated!');
     }
   });
 
