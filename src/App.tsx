@@ -11,12 +11,14 @@ import {
   CompetitionError,
   SubmitOfferCommand,
   SubmitOfferResult,
-  Offer,
 } from './core/competition_kernel';
 import { MARKET_MODULES, MarketModuleConfig } from './data/market_modules';
-import { TopHeader } from './components/TopHeader';
+import { Header } from './components/Header';
+import { HeroBanner } from './components/HeroBanner';
+import { TrustSecurityBar } from './components/TrustSecurityBar';
+import { CategoryPills } from './components/CategoryPills';
+import { AuctionGrid } from './components/AuctionGrid';
 import { BottomNav, NavTab } from './components/BottomNav';
-import { AuctionCard } from './components/AuctionCard';
 import { PriceLadderWidget } from './components/PriceLadderWidget';
 import { QuickBidModal } from './components/QuickBidModal';
 import { SettlementDashboard } from './components/SettlementDashboard';
@@ -28,26 +30,23 @@ import { NetworkResilienceModal } from './components/NetworkResilienceModal';
 import { OfflineResilienceManager, ResilientOffer } from './services/resilienceQueue';
 import { formatDualCurrency, formatTimestamp, toPersianDigits } from './utils/formatters';
 import {
-  Trophy,
-  Flame,
-  Zap,
+  Play,
+  Pause,
+  AlertCircle,
   TrendingUp,
-  ShieldCheck,
+  FileText,
+  Server,
   Building2,
   Coins,
+  Flame,
   Truck,
   Wheat,
   Cpu,
-  FileText,
-  AlertCircle,
-  Play,
-  Pause,
-  RotateCcw,
-  Sliders,
   ChevronRight,
-  Info,
-  Server,
-  Layers,
+  ShieldCheck,
+  Lock,
+  Headphones,
+  FileCheck2,
 } from 'lucide-react';
 
 export function App() {
@@ -531,28 +530,29 @@ export function App() {
 
   return (
     <div
-      className={`min-h-screen transition-colors duration-200 flex flex-col font-sans select-none pb-20 ${
+      className={`min-h-screen transition-colors duration-200 flex flex-col font-sans select-none pb-20 md:pb-0 ${
         isDarkTheme
           ? 'bg-slate-950 text-slate-100'
-          : 'bg-slate-50/80 text-slate-800'
+          : 'bg-slate-50 text-slate-800'
       }`}
       dir="rtl"
     >
-      {/* Temu-Style Sticky Top Header with search, horizontal category pills & PWA install */}
-      <TopHeader
+      {/* 1. Desktop & Mobile Header (Temu-Style Top Bar + Orange Brand Row) */}
+      <Header
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
-        selectedCategory={selectedCategory}
-        onSelectCategory={setSelectedCategory}
         isDarkTheme={isDarkTheme}
         onToggleTheme={handleToggleTheme}
         isOnline={isOnline}
         onOpenResilienceModal={() => setIsResilienceModalOpen(true)}
         pendingQueueCount={pendingQueue.length}
+        onNavigateTab={(tab) => setActiveTab(tab)}
+        activeTab={activeTab}
+        activeOffererId={activeOfferer.offererId}
       />
 
-      {/* Main Body per Active Tab */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-3 sm:p-5 lg:p-6 space-y-5">
+      {/* 2. Main Body Container (Standard 1440px Desktop Max Width) */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-3 space-y-4">
         {/* Alerts / Feedback Bar */}
         {(lastError || lastSuccess) && (
           <div
@@ -579,76 +579,40 @@ export function App() {
         )}
 
         {/* ---------------------------------------------------- */}
-        {/* TAB 1: HOME (Temu-Style Two-Column Masonry Grid)    */}
+        {/* TAB 1: HOME (Temu-Style Desktop Storefront Experience) */}
         {/* ---------------------------------------------------- */}
         {activeTab === 'home' && (
           <div className="space-y-4">
-            {/* Temu-Style Promotional Announcement Banner */}
-            <div className="relative overflow-hidden rounded-2xl p-4 sm:p-6 bg-linear-to-r from-orange-600 via-amber-600 to-red-600 text-white shadow-md">
-              <div className="relative z-10 flex flex-wrap items-center justify-between gap-3">
-                <div className="space-y-1 max-w-xl">
-                  <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-white/20 backdrop-blur-xs uppercase tracking-wide">
-                      حراج سراسری نهادهای دولتی
-                    </span>
-                    <span className="text-[11px] font-bold text-amber-200">
-                      تضمین اصالت و ودیعه امانی ۱۵٪
-                    </span>
-                  </div>
-                  <h2 className="text-lg sm:text-2xl font-black tracking-tight">
-                    سامانه رسمی عرضه مستقیم مسکوکات، انرژی و ترابری
-                  </h2>
-                  <p className="text-xs sm:text-sm text-white/90">
-                    تمامی پیشنهادات تحت نظارت الگوریتم هسته قطعی ADR-001 و قانون توالی TR-13 ثبت می‌گردند.
-                  </p>
-                </div>
+            {/* Hero Promotional Banner */}
+            <HeroBanner
+              currentTime={currentTime}
+              onExploreLive={() => setActiveTab('live')}
+              onOpenEscrowInfo={() => setActiveTab('wallet')}
+              isDarkTheme={isDarkTheme}
+            />
 
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setActiveTab('live')}
-                    className="px-4 py-2 rounded-xl text-xs font-bold bg-white text-orange-700 hover:bg-orange-50 shadow-sm flex items-center gap-1.5 transition-transform active:scale-95 cursor-pointer"
-                  >
-                    <Flame className="w-4 h-4 text-orange-600 fill-current" />
-                    <span>مشاهده نردبان‌های زنده</span>
-                  </button>
-                </div>
-              </div>
-            </div>
+            {/* Trust & Security Guarantee Bar (Temu-Style Strip) */}
+            <TrustSecurityBar isDarkTheme={isDarkTheme} />
 
-            {/* Section Header */}
-            <div className="flex items-center justify-between pt-1">
-              <div className="flex items-center gap-2">
-                <h3 className="font-extrabold text-sm sm:text-base">
-                  اقلام مزایده و حراج در حال برگزاری ({toPersianDigits(filteredModules.length)} مورد)
-                </h3>
-              </div>
-              <span className="text-xs text-slate-500 dark:text-slate-400">
-                ترتیب: زمان انقضا و فوریت
-              </span>
-            </div>
+            {/* Category Navigation Pills (Explore Your Interests) */}
+            <CategoryPills
+              selectedCategory={selectedCategory}
+              onSelectCategory={setSelectedCategory}
+              isDarkTheme={isDarkTheme}
+            />
 
-            {/* 2-Column Mobile Masonry / Responsive Product Grid */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-3 gap-2.5 sm:gap-4">
-              {filteredModules.map((mod) => {
-                const isSelectedModule = mod.id === currentModule.id;
-                const compHighest = isSelectedModule ? competition.highestOffer : null;
-                const compLadder = isSelectedModule ? competition.ladder : [];
-
-                return (
-                  <AuctionCard
-                    key={mod.id}
-                    module={mod}
-                    highestOffer={compHighest}
-                    ladder={compLadder}
-                    currentTime={currentTime}
-                    endsAt={isSelectedModule ? competition.endsAt : new Date(currentTime.getTime() + mod.durationMinutes * 60_000)}
-                    onQuickBid={handleOpenQuickBid}
-                    onSelectDetails={handleCardClick}
-                    isDarkTheme={isDarkTheme}
-                  />
-                );
-              })}
-            </div>
+            {/* Product & Auction Multi-Column Responsive Grid */}
+            <AuctionGrid
+              modules={filteredModules}
+              currentModuleId={currentModule.id}
+              highestOffer={competition.highestOffer}
+              ladder={competition.ladder}
+              currentTime={currentTime}
+              endsAt={competition.endsAt}
+              onQuickBid={handleOpenQuickBid}
+              onSelectDetails={handleCardClick}
+              isDarkTheme={isDarkTheme}
+            />
           </div>
         )}
 
@@ -657,21 +621,21 @@ export function App() {
         {/* ---------------------------------------------------- */}
         {activeTab === 'categories' && (
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
+            <div className="p-5 rounded-2xl border bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800">
               <h2 className="font-black text-base sm:text-lg mb-1">دسته‌بندی‌های تالارهای معاملاتی پرندو</h2>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 بر اساس تالارهای رسمی بورس کالا، بورس انرژی و املاک مازاد دولتی
               </p>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3 sm:gap-4">
               {[
                 { id: 'gold', name: 'طلا، جواهرات و مسکوکات', count: 12, icon: Coins, color: 'text-amber-500', bg: 'bg-amber-500/10' },
                 { id: 'petro', name: 'فرآورده‌های پتروشیمی و گاز', count: 8, icon: Flame, color: 'text-orange-500', bg: 'bg-orange-500/10' },
-                { id: 'automotive', name: 'خودرو و ناوگان تجاری', count: 5, icon: Truck, color: 'text-blue-500', bg: 'bg-blue-500/10' },
+                { id: 'automotive', name: 'خودرو و ناوگان تجاری سنگین', count: 5, icon: Truck, color: 'text-blue-500', bg: 'bg-blue-500/10' },
                 { id: 'realty', name: 'املاک و اراضی سازمان اموال تملیکی', count: 19, icon: Building2, color: 'text-emerald-500', bg: 'bg-emerald-500/10' },
-                { id: 'agri', name: 'محصولات استراتژیک کشاورزی', count: 7, icon: Wheat, color: 'text-yellow-600', bg: 'bg-yellow-600/10' },
-                { id: 'goods', name: 'ماشین‌آلات و خطوط تولید', count: 14, icon: Cpu, color: 'text-purple-500', bg: 'bg-purple-500/10' },
+                { id: 'agri', name: 'محصولات استراتژیک و صادراتی', count: 7, icon: Wheat, color: 'text-yellow-600', bg: 'bg-yellow-600/10' },
+                { id: 'goods', name: 'ماشین‌آلات و خطوط تولید صنعتی', count: 14, icon: Cpu, color: 'text-purple-500', bg: 'bg-purple-500/10' },
               ].map((cat) => {
                 const Icon = cat.icon;
                 return (
@@ -681,22 +645,22 @@ export function App() {
                       setSelectedCategory(cat.id);
                       setActiveTab('home');
                     }}
-                    className={`p-4 rounded-2xl border text-right transition-all group flex flex-col justify-between h-32 cursor-pointer ${
+                    className={`p-5 rounded-2xl border text-right transition-all group flex flex-col justify-between h-36 cursor-pointer ${
                       isDarkTheme
                         ? 'bg-slate-900 border-slate-800 hover:border-amber-500/40 hover:bg-slate-850'
                         : 'bg-white border-slate-200 hover:border-orange-400 hover:shadow-xs'
                     }`}
                   >
                     <div className="flex items-center justify-between">
-                      <div className={`p-2.5 rounded-xl ${cat.bg} ${cat.color}`}>
+                      <div className={`p-3 rounded-xl ${cat.bg} ${cat.color}`}>
                         <Icon className="w-5 h-5" />
                       </div>
                       <ChevronRight className="w-4 h-4 text-slate-400 group-hover:-translate-x-1 transition-transform" />
                     </div>
                     <div>
-                      <h4 className="font-bold text-xs sm:text-sm">{cat.name}</h4>
-                      <span className="text-[11px] text-slate-400">
-                        {toPersianDigits(cat.count)} حراج فعال
+                      <h4 className="font-bold text-sm sm:text-base">{cat.name}</h4>
+                      <span className="text-xs text-slate-400">
+                        {toPersianDigits(cat.count)} حراج و مزایده فعال
                       </span>
                     </div>
                   </button>
@@ -738,7 +702,7 @@ export function App() {
 
                 <button
                   onClick={handleSimulateBotBid}
-                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500 hover:bg-amber-600 text-slate-950 transition-all flex items-center gap-1 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl text-xs font-bold bg-[#fb7701] hover:bg-orange-600 text-white transition-all flex items-center gap-1 cursor-pointer"
                 >
                   <TrendingUp className="w-3.5 h-3.5" />
                   <span>تولید یک پیشنهاد رقیب</span>
@@ -759,7 +723,7 @@ export function App() {
               </div>
               <div className="md:col-span-8 flex flex-col justify-between space-y-2">
                 <div>
-                  <div className="flex items-center gap-2 text-xs text-orange-600 dark:text-orange-400 font-bold mb-1">
+                  <div className="flex items-center gap-2 text-xs text-[#fb7701] font-bold mb-1">
                     <span>{currentModule.badge}</span>
                     <span>&bull;</span>
                     <span className="font-mono">{currentModule.lotNumber}</span>
@@ -791,7 +755,7 @@ export function App() {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px]">طرف فعال شما:</span>
-                    <span className="font-bold font-mono text-orange-600 dark:text-orange-400">
+                    <span className="font-bold font-mono text-[#fb7701]">
                       {activeOfferer.offererId}
                     </span>
                   </div>
@@ -903,7 +867,60 @@ export function App() {
         )}
       </main>
 
-      {/* Floating Quick Bid Drawer Modal */}
+      {/* 3. Professional Desktop E-Commerce Footer */}
+      <footer className="mt-8 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/90 text-xs text-slate-500 dark:text-slate-400 py-8">
+        <div className="max-w-7xl mx-auto px-4 sm:px-8 space-y-6">
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
+            <div>
+              <h5 className="font-bold text-slate-900 dark:text-slate-100 mb-2">حراج ملی پرندو</h5>
+              <p className="text-[11px] leading-relaxed">
+                سامانه رسمی مزایدات و معاملات امانی کالاهای دولتی و سرمایه‌ای کشور تحت قوانین هسته قطعی ADR-001 و ضمانت مالی ADR-002.
+              </p>
+            </div>
+            <div>
+              <h5 className="font-bold text-slate-900 dark:text-slate-100 mb-2">تالارهای معاملاتی</h5>
+              <ul className="space-y-1 text-[11px]">
+                <li>بورس طلا و مسکوکات رسمی</li>
+                <li>فرآورده‌های پلیمری و صادراتی</li>
+                <li>ناوگان خودروهای تجاری سنگین</li>
+                <li>املاک و مستغلات دولتی</li>
+              </ul>
+            </div>
+            <div>
+              <h5 className="font-bold text-slate-900 dark:text-slate-100 mb-2">قوانین و ضمانت‌ها</h5>
+              <ul className="space-y-1 text-[11px]">
+                <li>سپرده ودیعه ۱۵٪ (K-INV-7)</li>
+                <li>پروتکل تکرارپذیری TR-12</li>
+                <li>تقدم شماره ترتیب TR-13</li>
+                <li>تسویه قطعی ADR-003</li>
+              </ul>
+            </div>
+            <div>
+              <h5 className="font-bold text-slate-900 dark:text-slate-100 mb-2">امنیت و پشتیبانی</h5>
+              <p className="text-[11px] leading-relaxed mb-2">
+                مرکز پاسخگویی متقاضیان و پشتیبانی فنی شبکه ملی اطلاعات (NIN).
+              </p>
+              <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-bold">
+                <ShieldCheck className="w-4 h-4" />
+                <span>گواهی اتصال پایدار به شبکه ملی</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+            <p>
+              &copy; {new Date().getFullYear()} سامانه حراج ملی پرندو (Parando) &middot; تمامی حقوق محفوظ است.
+            </p>
+            <div className="flex items-center gap-4">
+              <span className="hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">شرایط و قوانین</span>
+              <span className="hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">حریم خصوصی</span>
+              <span className="hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer">دیوان محاسبات کشور</span>
+            </div>
+          </div>
+        </div>
+      </footer>
+
+      {/* 4. Floating Quick Bid Drawer Modal */}
       <QuickBidModal
         isOpen={isQuickBidOpen}
         onClose={() => setIsQuickBidOpen(false)}
@@ -916,16 +933,18 @@ export function App() {
         isOnline={isOnline}
       />
 
-      {/* Mobile-First Sticky Bottom Navigation Bar */}
-      <BottomNav
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        isDarkTheme={isDarkTheme}
-        liveAuctionCount={MARKET_MODULES.length}
-        pendingHoldsCount={pendingQueue.length}
-      />
+      {/* 5. Mobile Sticky Bottom Navigation (Mobile & Tablet thumb navigation) */}
+      <div className="md:hidden">
+        <BottomNav
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          isDarkTheme={isDarkTheme}
+          liveAuctionCount={MARKET_MODULES.length}
+          pendingHoldsCount={pendingQueue.length}
+        />
+      </div>
 
-      {/* Subsystem Modals */}
+      {/* 6. Subsystem Modals */}
       <TestRunnerModal
         isOpen={isTestModalOpen}
         onClose={() => setIsTestModalOpen(false)}
