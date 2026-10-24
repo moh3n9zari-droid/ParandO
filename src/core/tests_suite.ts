@@ -588,7 +588,7 @@ export function runAllCoreTests(): TestResult[] {
     const evalSelf = integrityHook.beforeSubmitOffer({
       competition: comp,
       offerer,
-      amount: 1_000_000 + comp.rules.minIncrement * 100, // 100x minIncrement jump over self
+      amount: 1_000_000 + STEP * 100, // 100x minIncrement jump over self
       idempotencyKey: 'idem-self-jump',
       offerId: 'off-jump',
       timestamp: NOW,
@@ -607,10 +607,10 @@ export function runAllCoreTests(): TestResult[] {
 
     const offersData = [
       { offererId: 'user-a', amount: 1_000_000, offerId: 'off-a', idKey: 'k-a' },
-      { offererId: 'user-c', amount: 1_100_000, offerId: 'off-c', idKey: 'k-c' },
-      { offererId: 'user-b', amount: 1_200_000, offerId: 'off-b', idKey: 'k-b' },
+      { offererId: 'user-b', amount: 1_100_000, offerId: 'off-b', idKey: 'k-b' },
+      { offererId: 'user-c', amount: 1_200_000, offerId: 'off-c', idKey: 'k-c' },
       { offererId: 'user-d', amount: 1_300_000, offerId: 'off-d', idKey: 'k-d' },
-      { offererId: 'user-e', amount: 1_350_000, offerId: 'off-e', idKey: 'k-e' },
+      { offererId: 'user-e', amount: 1_400_000, offerId: 'off-e', idKey: 'k-e' },
     ];
 
     for (let i = 0; i < offersData.length; i++) {

@@ -50,25 +50,21 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               onClick={() => onTabChange(item.id)}
               className={`relative flex flex-col items-center justify-center gap-1 transition-all group cursor-pointer ${
                 isActive
-                  ? item.highlight
-                    ? 'text-orange-500 font-bold'
-                    : isDarkTheme
-                    ? 'text-amber-400 font-bold'
-                    : 'text-orange-600 font-bold'
-                  : 'hover:text-slate-800 dark:hover:text-slate-200'
+                  ? 'text-[#FF5000] font-bold'
+                  : 'text-slate-400 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
             >
               <div className="relative">
                 <Icon
                   className={`w-5 h-5 transition-transform duration-200 ${
-                    isActive ? 'scale-110' : 'group-hover:scale-105'
+                    isActive ? 'scale-110 text-[#FF5000]' : 'group-hover:scale-105'
                   }`}
                 />
                 {item.badge && (
                   <span
-                    className={`absolute -top-1.5 -right-2 text-[9px] font-bold px-1 py-0.2 rounded-full ${
+                    className={`absolute -top-1.5 -right-2 text-[9px] font-bold px-1.5 py-0.2 rounded-full ${
                       item.highlight
-                        ? 'bg-red-600 text-white animate-pulse'
+                        ? 'bg-[#FF5000] text-white animate-pulse'
                         : 'bg-amber-500 text-slate-900'
                     }`}
                   >
@@ -78,11 +74,7 @@ export const BottomNav: React.FC<BottomNavProps> = ({
               </div>
               <span className="text-[11px] tracking-tight">{item.label}</span>
               {isActive && (
-                <span
-                  className={`absolute top-0 w-8 h-0.5 rounded-full ${
-                    item.highlight ? 'bg-orange-500' : isDarkTheme ? 'bg-amber-400' : 'bg-orange-600'
-                  }`}
-                />
+                <span className="absolute top-0 w-8 h-0.5 rounded-full bg-[#FF5000]" />
               )}
             </button>
           );
