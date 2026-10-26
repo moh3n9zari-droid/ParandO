@@ -641,7 +641,12 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static('dist'));
-    app.get('{/*splat}', (_req, res) => {
+    app.use('/src/assets', express.static('src/assets'));
+    app.get('{/*splat}', (req, res) => {
+      if (req.path.startsWith('/api/')) {
+        res.status(404).json({ detail: 'API endpoint not found' });
+        return;
+      }
       res.sendFile('index.html', { root: 'dist' });
     });
   }
