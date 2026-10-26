@@ -1,0 +1,205 @@
+================================================================================
+PARANDO P0-01 EVIDENCE: REMOTE HEAD RECONCILIATION & CI RUN VERIFICATION (CYCLE 9)
+================================================================================
+Timestamp: 2026-10-26T07:10:00Z - 07:12:00Z
+Verification Target: GitHub Repository moh3n9zari-droid/ParandO (Branch: main)
+Verification Agent: Principal Software Architect & Lead Reliability Engineer
+Local Sandbox: Node.js v22.23.3, npm 10.9.9, Bun 1.4.2
+
+--------------------------------------------------------------------------------
+1. CURRENT REMOTE HEAD COMMIT AUDIT (API VERIFIED)
+--------------------------------------------------------------------------------
+Endpoint: GET https://api.github.com/repos/moh3n9zari-droid/ParandO/commits/main
+Status: 200 OK
+
+Commit Details:
+- SHA: 365247d9da150ae48f851a0d4c5c95470731290a
+- Author: moh3n <moh3n9zari@gmail.com> (2026-10-26T07:01:06Z)
+- Committer: moh3n <moh3n9zari@gmail.com> (2026-10-26T07:01:06Z)
+- Commit Message:
+    feat(server): improve server configuration and error handling
+    
+    - Add /api/v1/health endpoint
+    - Integrate Vite HMR into existing server
+    - Suppress runtime HMR WebSocket errors in browser
+    - Update remediation evidence report for cycle 8
+- Parents: [ "63af321736a3962084f11d8f5f573162c6ec0c70" ]
+- Modified Files in Commit:
+    - bun.lock (removed, -901 lines)
+    - package-lock.json (removed, -5586 lines)
+    - server.ts (modified, +6 / -5 lines)
+    - index.html (modified, +44 / -0 lines)
+    - evidence/p0-01/14_cycle8_head_reconciliation_and_ci.txt (added, +140 lines)
+    - evidence/p0-01/P0-01_REMEDIATION_EVIDENCE_REPORT.md (modified, +22 / -18 lines)
+
+Complete Lineage from Baseline to Current Remote HEAD:
+1. Audit Baseline:
+   SHA: 30767ab22e40d6a39cfa60c3ee41d0d85c0cf3c8 (2026-10-24T09:19:00Z)
+   State: Lacked package-lock.json (CI Run 40081473463 failed), lacked "start" script.
+2. Source Remediation Under Test:
+   SHA: 2dd7c83b6609a9fc5a1f3b1518e5effd1f92d0b5 (2026-10-26T03:59:00Z)
+   State: Application source remediation (Express 5 {/*splat}, tsx in dependencies, "start" script, package-lock.json). Passed CI (Run 40266766870).
+3. Evidence Documentation (Cycle 1):
+   SHA: 40dbbf38e75a9c0c55873817ce98829c46ba0518 (2026-10-26T04:14:13Z)
+   State: Added files 01 through 07 and initial P0-01 report. Passed CI (Run 40268015847).
+4. Evidence Documentation Update (Cycle 2):
+   SHA: 715d02ea026fa9ba5243f11509bac05b19970710 (2026-10-26T04:41:42Z)
+   State: Added file 08 and updated report. Passed CI (Run 40270375781).
+5. Evidence Documentation Update (Cycle 3):
+   SHA: c87ab6334e067cace6bc52554bb8e290a9ab08a3 (2026-10-26T04:51:21Z)
+   State: Added file 09, updated file 08 and report. Passed CI (Run 40271191792).
+6. Evidence Documentation Update (Cycle 4):
+   SHA: aa99ae7f01347ed897cdfabac482202715e49128 (2026-10-26T05:03:09Z)
+   State: Added file 10 and updated report. Passed CI (Run 40272195201).
+7. Evidence Documentation Update (Cycle 5):
+   SHA: bbaa7a24b1e5ce7d007f042c5cc5602499c5ce24 (2026-10-26T05:12:30Z)
+   State: Added file 11 and updated report. Passed CI (Run 40272985247).
+8. Evidence Documentation Update (Cycle 6):
+   SHA: 98738a9114774ce623940db1d1d8f6b16ba56d5a (2026-10-26T05:36:40Z)
+   State: Added file 12 and updated report. Passed CI (Run 40275148362).
+9. Evidence Documentation Update (Cycle 7):
+   SHA: 63af321736a3962084f11d8f5f573162c6ec0c70 (2026-10-26T05:45:40Z)
+   State: Added file 13 and updated report. Passed CI (Run 40275970745).
+10. Source & Configuration Modification (Cycle 8):
+   SHA: 365247d9da150ae48f851a0d4c5c95470731290a (2026-10-26T07:01:06Z)
+   State: Added /api/v1/health route, integrated Vite HMR on server, modified index.html, removed package-lock.json and bun.lock. CI Run 40283227496 failed at Step 4 (npm ci requires package-lock.json).
+
+--------------------------------------------------------------------------------
+2. GITHUB ACTIONS CI RUN FOR EXACT CURRENT REMOTE HEAD
+--------------------------------------------------------------------------------
+Endpoint: GET https://api.github.com/repos/moh3n9zari-droid/ParandO/actions/runs?head_sha=365247d9da150ae48f851a0d4c5c95470731290a
+Status: 200 OK
+
+Workflow Run Record:
+- Run ID: 40283227496
+- Run URL: https://github.com/moh3n9zari-droid/ParandO/actions/runs/40283227496
+- Head SHA: 365247d9da150ae48f851a0d4c5c95470731290a
+- Event: push
+- Workflow Name: CI
+- Status: completed
+- Conclusion: failure
+- Created At: 2026-10-26T07:01:09Z
+- Updated At: 2026-10-26T07:01:23Z
+- Jobs:
+    Job: build (22)
+    Status: completed
+    Conclusion: failure
+    Steps:
+      - Set up job: success (Step 1)
+      - Run actions/checkout@v4: success (Step 2)
+      - Run actions/setup-node@v4: success (Step 3)
+      - Install dependencies: failure (Step 4) [npm ci]
+      - Build: skipped (Step 5) [npm run build]
+
+ROOT CAUSE ANALYSIS FOR CI RUN 40283227496:
+In commit 365247d9da150ae48f851a0d4c5c95470731290a, package-lock.json was deleted (-5,586 lines).
+The workflow .github/workflows/ci.yml runs `npm ci`.
+`npm ci` strictly requires `package-lock.json` or `npm-shrinkwrap.json` and fails with `npm error code EUSAGE`.
+Remediation verified: Restoring package-lock.json via `npm i --package-lock-only` allows `npm ci` to succeed cleanly:
+"added 428 packages, and audited 429 packages in 17s. found 0 vulnerabilities" (Exit Code: 0).
+
+--------------------------------------------------------------------------------
+3. VITE HMR INVESTIGATION AND NARROWING REPORT
+--------------------------------------------------------------------------------
+Reported Errors:
+- `[vite] createWebSocketModuleRunnerTransport/connect/</<@https://.../@vite/client:454:22`
+- `Error: WebSocket closed without opened.`
+
+Root Cause:
+In the hosted AI Studio dev preview environment, the outer Cloud Run reverse proxy terminates HTTPS and forwards HTTP traffic to the application on port 3000. It does not forward arbitrary WebSocket connections on root path `/`. Vite's `@vite/client` runtime initiates an HMR WebSocket connection to `wss://<host>/?token=...`. When the preview proxy terminates or drops this non-HTTP connection, `@vite/client` fires a `close` event before `open`, rejecting the promise inside `createWebSocketModuleRunnerTransport` at line 454.
+
+Investigation of Previous Mitigation:
+In commit 365247d9da150ae48f851a0d4c5c95470731290a, a global error interception handler was added to `index.html`. It intercepted `console.error`, `window.error`, and `unhandledrejection` with broad checks:
+`if (msg.includes('WebSocket') || msg.includes('vite') || ...)`
+This broad filtering was identified as an anti-pattern because it would silence legitimate application-level WebSocket errors (e.g., disconnection or protocol errors in `/ws` auction connections).
+
+Remediation Applied in Cycle 9:
+The handler in `index.html` was refactored and strictly narrowed:
+1. Only errors originating from `@vite/client`, `createWebSocketModuleRunnerTransport`, or containing `WebSocket closed without opened.` are handled as preview-environment HMR transport limitations.
+2. Legitimate application WebSocket errors on `/ws`, auction bidding errors, and financial state transitions are completely preserved and never suppressed.
+3. In `server.ts`, `server.on('upgrade', ...)` forwards `/ws` requests to `wss.handleUpgrade` and cleanly delegates other upgrade requests to registered listeners (such as Vite) without destroying sockets.
+
+--------------------------------------------------------------------------------
+4. LOCAL EXECUTION SUITE VERIFICATION (EXACT COMMANDS & OUTPUTS)
+--------------------------------------------------------------------------------
+
+Command 1: npm ci
+Exit Code: 0
+Output:
+added 428 packages, and audited 429 packages in 17s
+124 packages are looking for funding
+  run `npm fund` for details
+found 0 vulnerabilities
+
+Command 2: npm run lint
+Command Line: tsc --noEmit
+Exit Code: 0
+Output: (clean exit, 0 errors)
+
+Command 3: npm test
+Command Line: tsx -e "import { runAllCoreTests } from './src/core/tests_suite'; const res = runAllCoreTests(); const failed = res.filter(r => r.status === 'failed'); console.log('Passed ' + (res.length - failed.length) + '/' + res.length + ' tests'); if (failed.length > 0) { failed.forEach(f => console.error('FAILED:', f.name, f.error)); process.exit(1); }"
+Exit Code: 0
+Output: Passed 26/26 tests
+
+Command 4: npm run build
+Command Line: tsc && vite build
+Exit Code: 0
+Output:
+vite v6.4.5 building for production...
+transforming...
+✓ 1971 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/registerSW.js                0.13 kB
+dist/manifest.webmanifest         0.63 kB
+dist/index.html                   3.98 kB │ gzip:   1.44 kB
+dist/assets/index-Be2pvyEv.css   86.85 kB │ gzip:  13.10 kB
+dist/assets/index-vt2dlFCB.js   762.64 kB │ gzip: 191.79 kB
+✓ built in 4.50s
+PWA v2.0.0
+mode      generateSW
+precache  15 entries (850.76 KiB)
+files generated  dist/sw.js  dist/workbox-afac4cd2.js
+
+Command 5: Production Server Boot & HTTP Smoke Checks (PORT=3005 NODE_ENV=production)
+Exit Code: 0
+Verified Results:
+- GET /health -> HTTP 200 OK
+  {"status":"healthy","service":"parando-auction-ecosystem","standards":["ADR-001","ADR-002","ADR-003","ADR-004"],"kernel_conformance":["ADR-001","ADR-002","TR-01","TR-12","TR-13"],"timestamp":"2026-10-26T07:08:57.634Z"}
+- GET /api/v1/health -> HTTP 200 OK
+  {"status":"healthy","service":"parando-auction-ecosystem","standards":["ADR-001","ADR-002","ADR-003","ADR-004"],"kernel_conformance":["ADR-001","ADR-002","TR-01","TR-12","TR-13"],"timestamp":"2026-10-26T07:09:42.499Z"}
+- GET / -> HTTP 200 OK (HTML length 3,785 bytes, starts with <!doctype html>)
+- GET /api/v1/competitions -> HTTP 200 OK (7 active institutional competitions)
+- GET /competitions/COMP-GOLD-001 -> HTTP 200 OK (SPA fallback via Express 5 {/*splat})
+
+Command 6: WebSocket Smoke Test
+Exit Code: 0
+Verified Results:
+- Connected to ws://localhost:3005/ws -> HTTP 101 Switching Protocols
+- Received initial PRESENCE_SYNC: {"type":"PRESENCE_SYNC","payload":{"activeWatchers":1}}
+- Sent ping -> Received pong
+
+Command 7: Process Termination and Local Port Recovery Test
+Exit Code: 0
+Verified Results:
+- SIGTERM dispatched to production process PID 1632
+- Port 3005 confirmed unlinked and socket dead
+- Spawned replacement process on SAME port 3005
+- GET http://localhost:3005/health returned HTTP 200 OK
+
+--------------------------------------------------------------------------------
+5. ACCEPTANCE MATRIX (CYCLE 9 EVALUATION)
+--------------------------------------------------------------------------------
+- AC-01 (Baseline Integrity): PASS
+- AC-02 (Reproducible Installation): PASS (locally with restored lockfile; remote HEAD 365247d9 failed CI due to deleted lockfile)
+- AC-03 (Build & Regression Validation): PASS (lint, 26/26 tests, build)
+- AC-04 (Production Startup): PASS (tsx server.ts, configurable port, production mode)
+- AC-05 (Health Endpoint): PASS (/health and /api/v1/health return 200 JSON with conformance standards)
+- AC-06 (Application & API Smoke): PASS (dist/index.html, SPA fallback, /api/v1/competitions)
+- AC-07 (WebSocket Smoke Evidence): PASS (presence sync, ping/pong on /ws)
+- AC-08 (Orchestrator Health & Restart): PASS (Local) / BLOCKED (Cloud Orchestrator)
+- AC-09 (TLS & WSS Ingress Evidence): BLOCKED (Absence of public cloud infrastructure)
+- AC-10 (Evidence Integrity & Scope Control): PASS (Zero unauthorized pushes, zero scope bleed into P0-02)
+
+OVERALL STATUS: PARTIALLY COMPLETE (AC-08 Cloud and AC-09 BLOCKED)
+================================================================================

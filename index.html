@@ -3,16 +3,16 @@
   <head>
     <script>
       (function () {
-        // Runtime environment constraint: HMR is disabled in this environment. Ignore WebSocket / HMR transport errors.
+        // AI Studio runtime constraint: HMR WebSockets are not forwarded by the preview proxy.
+        // Narrowly handle Vite internal HMR transport errors without swallowing application WebSocket errors.
         var origConsoleError = console.error;
         console.error = function () {
           var firstArg = arguments[0];
           var msg = typeof firstArg === 'string' ? firstArg : (firstArg && (firstArg.message || firstArg.stack)) || '';
           if (
-            msg.includes('[vite]') ||
-            msg.includes('WebSocket') ||
             msg.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('vite:ws')
+            msg.includes('WebSocket closed without opened.') ||
+            (msg.includes('[vite]') && msg.includes('connect'))
           ) {
             return;
           }
@@ -22,10 +22,9 @@
           var msg = event && event.message ? String(event.message) : '';
           var src = event && event.filename ? String(event.filename) : '';
           if (
-            msg.includes('WebSocket') ||
+            src.includes('@vite/client') ||
             msg.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('vite') ||
-            src.includes('@vite/client')
+            msg.includes('WebSocket closed without opened.')
           ) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -35,9 +34,9 @@
         window.addEventListener('unhandledrejection', function (event) {
           var reason = event && event.reason ? String(event.reason.message || event.reason.stack || event.reason) : '';
           if (
-            reason.includes('WebSocket') ||
             reason.includes('createWebSocketModuleRunnerTransport') ||
-            reason.includes('vite')
+            reason.includes('WebSocket closed without opened.') ||
+            (reason.includes('[vite]') && reason.includes('connect'))
           ) {
             event.preventDefault();
             event.stopImmediatePropagation();
