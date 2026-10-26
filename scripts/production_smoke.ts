@@ -2,8 +2,10 @@ import http from 'http';
 import net from 'net';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { spawn, ChildProcess } from 'child_process';
 import WebSocket from 'ws';
+import { generateTestToken } from '../src/auth/test_token_helper';
 
 /**
  * ParandO Production Smoke Test Suite & Process Lifecycle Engine
@@ -416,12 +418,23 @@ export async function runProductionSmokeTests() {
   assert(!distHtml.includes('createWebSocketModuleRunnerTransport'), 'dist/index.html does not contain createWebSocketModuleRunnerTransport');
   assert(distHtml.includes('<div id="root">'), 'dist/index.html contains root mount node');
 
-  // Allocate dynamic ephemeral port
+  // Allocate dynamic ephemeral port and ephemeral smoke auth credentials
   const port = await getFreePort();
+  const smokeSecret = crypto.randomBytes(32).toString('hex');
+  const smokeToken = generateTestToken(
+    {
+      sub: 'smoke-tester',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    },
+    smokeSecret
+  );
   console.log(`\nAllocated dynamic ephemeral port: ${port}`);
 
   console.log(`\n[Test 2/12] Spawning production server on port ${port}...`);
-  let serverProcess = spawnProductionServer(port);
+  let serverProcess = spawnProductionServer(port, { PARANDO_AUTH_SECRET: smokeSecret });
 
   try {
     await waitForServerReady(serverProcess, port);
@@ -525,7 +538,9 @@ export async function runProductionSmokeTests() {
     // Assertion 8: Real application WebSocket handshake on /ws
     console.log('\n[Test 9/12] Testing WebSocket connection on ws://127.0.0.1:' + port + '/ws...');
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`, {
+        headers: { Authorization: `Bearer ${smokeToken}` },
+      });
       let presenceReceived = false;
       let pongStringReceived = false;
       let pongJsonReceived = false;
@@ -587,7 +602,9 @@ export async function runProductionSmokeTests() {
     // Assertion 9: WebSocket connection on /ws/competitions/COMP-GOLD-001
     console.log('\n[Test 10/12] Testing WebSocket competition snapshot on ws://127.0.0.1:' + port + '/ws/competitions/COMP-GOLD-001...');
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/competitions/COMP-GOLD-001`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/competitions/COMP-GOLD-001`, {
+        headers: { Authorization: `Bearer ${smokeToken}` },
+      });
       let settled = false;
 
       const timeout = setTimeout(() => {
@@ -684,7 +701,7 @@ export async function runProductionSmokeTests() {
 
     // Restart server on identical port
     console.log(`Restarting production server on SAME port ${port}...`);
-    serverProcess = spawnProductionServer(port);
+    serverProcess = spawnProductionServer(port, { PARANDO_AUTH_SECRET: smokeSecret });
     await waitForServerReady(serverProcess, port);
 
     const restartHealthRes = await httpRequest({

@@ -9,6 +9,7 @@ if ((globalThis as any).__filename === '.') {
 
 import express from 'express';
 import http from 'http';
+import net from 'net';
 import { WebSocketServer, WebSocket } from 'ws';
 import cors from 'cors';
 import crypto from 'crypto';
@@ -41,6 +42,7 @@ import {
   authenticateRequest,
   requireAuth,
   requireRole,
+  verifyToken,
   AuthenticatedPrincipal,
   UserRole,
 } from './src/auth/auth_service';
@@ -518,10 +520,11 @@ async function startServer() {
     });
     if (auditEvents.length > 200) auditEvents.pop();
 
-    // Broadcast live ladder update
-    broadcastWS({
+    // Broadcast live ladder update (scoped to competition and tenant)
+    broadcastToCompetition(compId, comp.tenantId, {
       type: 'ladder.update',
       competition_id: compId,
+      tenant_id: comp.tenantId,
       version: result.competition.version,
       rank: result.rank,
       new_offer: serializeOffer(result.offer),
@@ -801,9 +804,10 @@ async function startServer() {
       status: 'SETTLED',
     });
 
-    broadcastWS({
+    broadcastToCompetition(compId, comp.tenantId, {
       type: 'ladder.determined',
       competition_id: compId,
+      tenant_id: comp.tenantId,
       winner_id: winnerId,
       clearing_price: clearingPrice,
       voucher_id: voucherId,
@@ -821,67 +825,280 @@ async function startServer() {
 
   const server = http.createServer(app);
 
-  // WebSocket Server on /ws and /ws/competitions/:id
-  const wss = new WebSocketServer({ noServer: true });
-  const connectedClients = new Set<WebSocket>();
+  // ---------------------------------------------------------------------------
+  // WebSocket Server & Strict Tenant Isolation (P0-03)
+  // ---------------------------------------------------------------------------
 
-  server.on('upgrade', (request, socket, head) => {
-    const url = request.url || '';
-    const protocol = request.headers['sec-websocket-protocol'];
-    if (url.startsWith('/ws')) {
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit('connection', ws, request);
-      });
-    } else if (
-      protocol === 'vite-hmr' ||
-      protocol === 'vite-ping' ||
-      url.startsWith('/@vite') ||
-      url.includes('token=')
-    ) {
-      // Allow Vite HMR to process this upgrade request
-      return;
-    } else {
+  interface ScopedClient {
+    ws: WebSocket;
+    principal: AuthenticatedPrincipal;
+    tenantId: string;
+    competitionId?: string;
+    connectedAt: number;
+  }
+
+  const wss = new WebSocketServer({
+    noServer: true,
+    handleProtocols: (_protocols, req) => {
+      return (req as any).selectedProtocol || false;
+    },
+  });
+  const connectedClients = new Map<WebSocket, ScopedClient>();
+
+  function rejectUpgrade(
+    socket: net.Socket,
+    statusCode: number,
+    statusText: string,
+    message: string
+  ) {
+    try {
+      if (socket.writable) {
+        const body = `${statusCode} ${statusText}: ${message}\r\n`;
+        const response =
+          `HTTP/1.1 ${statusCode} ${statusText}\r\n` +
+          `Content-Type: text/plain; charset=utf-8\r\n` +
+          `Content-Length: ${Buffer.byteLength(body)}\r\n` +
+          `Connection: close\r\n\r\n` +
+          body;
+        socket.write(response);
+      }
+    } finally {
       socket.destroy();
     }
+  }
+
+  function extractWsToken(request: http.IncomingMessage): { token: string | null; selectedProtocol?: string } {
+    let token: string | null = null;
+    let selectedProtocol: string | undefined = undefined;
+
+    // 1. Authorization header: "Bearer <token>"
+    const authHeader = request.headers['authorization'];
+    if (authHeader && typeof authHeader === 'string') {
+      const parts = authHeader.trim().split(/\s+/);
+      if (parts.length === 2 && parts[0].toLowerCase() === 'bearer') {
+        token = parts[1];
+      }
+    }
+
+    // 2. Sec-WebSocket-Protocol header: "bearer.<token>", "bearer, <token>", or compact token
+    const protoHeader = request.headers['sec-websocket-protocol'];
+    if (protoHeader && typeof protoHeader === 'string') {
+      const subprotocols = protoHeader.split(',').map((p) => p.trim());
+      for (const subproto of subprotocols) {
+        if (subproto.toLowerCase().startsWith('bearer.')) {
+          if (!token) token = subproto.slice(7);
+          selectedProtocol = subproto;
+          break;
+        }
+        if (subprotocols.length === 2 && subprotocols[0].toLowerCase() === 'bearer') {
+          if (!token) token = subprotocols[1];
+          selectedProtocol = subprotocols[0];
+          break;
+        }
+        if (subproto.split('.').length === 3) {
+          if (!token) token = subproto;
+          selectedProtocol = subproto;
+          break;
+        }
+      }
+    }
+
+    return { token, selectedProtocol };
+  }
+
+  server.on('upgrade', (request, socket: net.Socket, head) => {
+    const rawUrl = request.url || '';
+    const protocol = request.headers['sec-websocket-protocol'];
+
+    // Allow Vite HMR in development mode
+    if (
+      protocol === 'vite-hmr' ||
+      protocol === 'vite-ping' ||
+      rawUrl.startsWith('/@vite')
+    ) {
+      return;
+    }
+
+    // Validate path structure
+    let pathname = '';
+    try {
+      const parsedUrl = new URL(rawUrl, 'http://127.0.0.1');
+      pathname = parsedUrl.pathname;
+    } catch {
+      rejectUpgrade(socket, 400, 'Bad Request', 'Malformed request URL');
+      return;
+    }
+
+    const isGeneralWs = pathname === '/ws';
+    const compMatch = pathname.match(/^\/ws\/competitions\/([^/?]+)$/);
+
+    if (!isGeneralWs && !compMatch) {
+      rejectUpgrade(socket, 404, 'Not Found', 'Unsupported WebSocket route');
+      return;
+    }
+
+    // Authenticate WebSocket upgrade request via established server-side trust boundary
+    const { token, selectedProtocol } = extractWsToken(request);
+    if (!token) {
+      auditSecurityAlert({
+        sub_type: 'WS_UNAUTHENTICATED',
+        reason: 'Missing authentication credentials on WebSocket upgrade',
+        path: pathname,
+        method: 'GET',
+      });
+      rejectUpgrade(socket, 401, 'Unauthorized', 'Authentication credentials required for WebSocket connection');
+      return;
+    }
+
+    const verification = verifyToken(token);
+    if (!verification.valid || !verification.principal) {
+      auditSecurityAlert({
+        sub_type: 'WS_INVALID_TOKEN',
+        reason: verification.message || 'Invalid or expired credentials on WebSocket upgrade',
+        path: pathname,
+        method: 'GET',
+      });
+      rejectUpgrade(socket, 401, 'Unauthorized', verification.message || 'Invalid or expired token');
+      return;
+    }
+
+    const principal = verification.principal;
+
+    // Competition-specific authorization & strict tenant isolation
+    let compId: string | undefined = undefined;
+    if (compMatch) {
+      compId = compMatch[1];
+      const comp = competitionsMap.get(compId);
+      if (!comp) {
+        rejectUpgrade(socket, 404, 'Not Found', `Competition '${compId}' not found`);
+        return;
+      }
+
+      // Tenant isolation: Principal must belong to competition's tenant
+      if (principal.tenantId !== comp.tenantId) {
+        auditSecurityAlert({
+          sub_type: 'WS_TENANT_MISMATCH',
+          reason: `Principal tenant '${principal.tenantId}' attempted to access competition '${compId}' belonging to '${comp.tenantId}'`,
+          path: pathname,
+          method: 'GET',
+          principal_id: principal.userId,
+          tenant_id: principal.tenantId,
+        });
+        rejectUpgrade(
+          socket,
+          403,
+          'Forbidden',
+          `TENANT_MISMATCH: Principal tenant '${principal.tenantId}' not authorized for competition '${compId}' (tenant: '${comp.tenantId}')`
+        );
+        return;
+      }
+    }
+
+    (request as any).authenticatedPrincipal = principal;
+    (request as any).tenantId = principal.tenantId;
+    (request as any).competitionId = compId;
+    (request as any).selectedProtocol = selectedProtocol;
+
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
   });
 
-  function broadcastPresence() {
+  function broadcastPresenceForCompetition(competitionId: string, tenantId: string) {
+    let count = 0;
+    for (const client of connectedClients.values()) {
+      if (client.competitionId === competitionId && client.tenantId === tenantId) {
+        count++;
+      }
+    }
     const presencePayload = JSON.stringify({
       type: 'PRESENCE_SYNC',
-      payload: { activeWatchers: connectedClients.size },
+      competition_id: competitionId,
+      tenant_id: tenantId,
+      payload: { activeWatchers: count },
       timestamp: Date.now(),
     });
 
-    for (const client of connectedClients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(presencePayload);
+    for (const client of connectedClients.values()) {
+      if (
+        client.competitionId === competitionId &&
+        client.tenantId === tenantId &&
+        client.ws.readyState === WebSocket.OPEN
+      ) {
+        client.ws.send(presencePayload);
       }
     }
   }
 
-  function broadcastWS(msg: any) {
+  function broadcastPresenceForTenant(tenantId: string) {
+    let count = 0;
+    for (const client of connectedClients.values()) {
+      if (client.tenantId === tenantId && !client.competitionId) {
+        count++;
+      }
+    }
+    const presencePayload = JSON.stringify({
+      type: 'PRESENCE_SYNC',
+      tenant_id: tenantId,
+      payload: { activeWatchers: count },
+      timestamp: Date.now(),
+    });
+
+    for (const client of connectedClients.values()) {
+      if (
+        client.tenantId === tenantId &&
+        !client.competitionId &&
+        client.ws.readyState === WebSocket.OPEN
+      ) {
+        client.ws.send(presencePayload);
+      }
+    }
+  }
+
+  function broadcastToCompetition(competitionId: string, tenantId: string, msg: any) {
     const str = typeof msg === 'string' ? msg : JSON.stringify(msg);
-    for (const client of connectedClients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(str);
+    for (const client of connectedClients.values()) {
+      if (
+        client.competitionId === competitionId &&
+        client.tenantId === tenantId &&
+        client.ws.readyState === WebSocket.OPEN
+      ) {
+        client.ws.send(str);
+      }
+    }
+  }
+
+  function broadcastToTenant(tenantId: string, msg: any) {
+    const str = typeof msg === 'string' ? msg : JSON.stringify(msg);
+    for (const client of connectedClients.values()) {
+      if (client.tenantId === tenantId && client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(str);
       }
     }
   }
 
   wss.on('connection', (ws, req) => {
-    connectedClients.add(ws);
-    broadcastPresence();
+    const principal = (req as any).authenticatedPrincipal as AuthenticatedPrincipal;
+    const compId = (req as any).competitionId as string | undefined;
+    const tenantId = (req as any).tenantId as string;
 
-    const url = req.url || '';
-    const compMatch = url.match(/\/ws\/competitions\/([^/?]+)/);
-    if (compMatch) {
-      const compId = compMatch[1];
+    const scopedClient: ScopedClient = {
+      ws,
+      principal,
+      tenantId,
+      competitionId: compId,
+      connectedAt: Date.now(),
+    };
+    connectedClients.set(ws, scopedClient);
+
+    if (compId) {
       const comp = competitionsMap.get(compId);
       if (comp) {
         ws.send(
           JSON.stringify({
             type: 'ladder.snapshot',
             competition_id: compId,
+            tenant_id: comp.tenantId,
             version: comp.version,
             status: comp.status,
             highest_offer: serializeOffer(comp.highestOffer),
@@ -891,7 +1108,25 @@ async function startServer() {
           })
         );
       }
+      broadcastPresenceForCompetition(compId, tenantId);
+    } else {
+      broadcastPresenceForTenant(tenantId);
     }
+
+    const cleanupClient = () => {
+      const info = connectedClients.get(ws);
+      if (info) {
+        connectedClients.delete(ws);
+        if (info.competitionId) {
+          broadcastPresenceForCompetition(info.competitionId, info.tenantId);
+        } else {
+          broadcastPresenceForTenant(info.tenantId);
+        }
+      }
+    };
+
+    ws.on('close', cleanupClient);
+    ws.on('error', cleanupClient);
 
     ws.on('message', (data) => {
       try {
@@ -901,31 +1136,35 @@ async function startServer() {
           return;
         }
 
-        const parsed = JSON.parse(msgStr);
+        let parsed: any;
+        try {
+          parsed = JSON.parse(msgStr);
+        } catch {
+          return;
+        }
+
         if (parsed.type === 'PING') {
           ws.send(JSON.stringify({ type: 'PONG', timestamp: Date.now() }));
           return;
         }
 
-        // Broadcast to all other connected clients
-        for (const client of connectedClients) {
-          if (client !== ws && client.readyState === WebSocket.OPEN) {
-            client.send(msgStr);
+        // Relaying message: STRICTLY isolated to the same competition and same tenant
+        const sender = connectedClients.get(ws);
+        if (!sender) return;
+
+        for (const recipient of connectedClients.values()) {
+          if (
+            recipient.ws !== ws &&
+            recipient.ws.readyState === WebSocket.OPEN &&
+            recipient.tenantId === sender.tenantId &&
+            recipient.competitionId === sender.competitionId
+          ) {
+            recipient.ws.send(msgStr);
           }
         }
       } catch (err) {
         console.warn('[WS] Error processing message:', err);
       }
-    });
-
-    ws.on('close', () => {
-      connectedClients.delete(ws);
-      broadcastPresence();
-    });
-
-    ws.on('error', () => {
-      connectedClients.delete(ws);
-      broadcastPresence();
     });
   });
 
@@ -983,9 +1222,10 @@ async function startServer() {
   const shutdown = () => {
     console.log('[ParandO] Received shutdown signal, closing server...');
     wss.close();
-    for (const client of connectedClients) {
+    for (const client of connectedClients.keys()) {
       client.terminate();
     }
+    connectedClients.clear();
     server.close(() => {
       console.log('[ParandO] Server and WebSockets closed gracefully');
       process.exit(0);

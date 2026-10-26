@@ -14,6 +14,7 @@
     "test:failure-cleanup": "tsx scripts/test_failure_cleanup.ts",
     "test:timeout-cleanup": "tsx scripts/test_timeout_cleanup.ts",
     "test:security": "tsx scripts/test_security_p0_02.ts",
+    "test:websocket-security": "tsx scripts/test_security_p0_03.ts",
     "preview": "vite preview --port 3000"
   },
   "dependencies": {
