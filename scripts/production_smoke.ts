@@ -6,7 +6,7 @@ import { spawn, ChildProcess } from 'child_process';
 import WebSocket from 'ws';
 
 /**
- * ParandO Production Smoke Test Suite
+ * ParandO Production Smoke Test Suite & Process Lifecycle Engine
  *
  * Validates local production-grade delivery acceptance criteria:
  * 1. Health check endpoint (/health) returns 200 JSON
@@ -21,11 +21,13 @@ import WebSocket from 'ws';
  * 10. Unsupported WebSocket upgrade path rejection (socket destroyed)
  * 11. Graceful shutdown (SIGTERM) releasing port, and clean restart on identical port
  *     with explicit exit event verification for both initial and restarted server processes.
+ * 12. Forced-termination escalation (SIGKILL) when a child process ignores graceful signals,
+ *     verifying the kernel exit event, signal code, and process group cleanup.
  */
 
-const activeProcesses: ChildProcess[] = [];
+export const activeProcesses: ChildProcess[] = [];
 
-function registerChild(child: ChildProcess) {
+export function registerChild(child: ChildProcess): void {
   activeProcesses.push(child);
   child.once('exit', () => {
     const idx = activeProcesses.indexOf(child);
@@ -35,42 +37,114 @@ function registerChild(child: ChildProcess) {
   });
 }
 
-function killProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM') {
-  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
+/**
+ * Determine whether a process is still alive in the operating system.
+ * CRITICAL: Never relies on `child.killed`, which in Node.js only indicates
+ * whether child.kill() was called, NOT whether the process has exited.
+ */
+export function isProcessAlive(child: ChildProcess): boolean {
+  if (!child.pid) return false;
+  if (child.exitCode !== null || child.signalCode !== null) return false;
   try {
-    if (process.platform !== 'win32') {
-      // Signal process group if detached
-      process.kill(-child.pid, signal);
-    } else {
-      child.kill(signal);
-    }
-  } catch {
+    process.kill(child.pid, 0);
+    return true;
+  } catch (err: any) {
+    return false;
+  }
+}
+
+/**
+ * Dispatches a POSIX signal to a child process and its process group.
+ * Does NOT check `child.killed`, allowing escalation signals (e.g. SIGKILL)
+ * to be dispatched after an initial graceful signal.
+ */
+export function sendSignal(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM'): boolean {
+  if (!child.pid || !isProcessAlive(child)) {
+    return false;
+  }
+
+  let sent = false;
+  if (process.platform !== 'win32') {
     try {
-      child.kill(signal);
+      // Signal the detached process group
+      process.kill(-child.pid, signal);
+      sent = true;
+    } catch (errGroup: any) {
+      if (errGroup.code !== 'ESRCH') {
+        try {
+          process.kill(child.pid, signal);
+          sent = true;
+        } catch (errPid: any) {
+          if (errPid.code !== 'ESRCH') {
+            try {
+              sent = child.kill(signal);
+            } catch {}
+          }
+        }
+      }
+    }
+  } else {
+    try {
+      sent = child.kill(signal);
     } catch {}
   }
+
+  return sent;
 }
 
-function cleanupAll() {
-  const toClean = [...activeProcesses];
-  for (const child of toClean) {
-    if (child.pid && !child.killed && child.exitCode === null && child.signalCode === null) {
-      killProcess(child, 'SIGKILL');
+/**
+ * Asynchronously cleans up all registered active processes, giving them
+ * a bounded duration to exit cleanly before reporting or timing out.
+ */
+export async function cleanupAllAsync(timeoutMs = 3000): Promise<void> {
+  const aliveChildren = activeProcesses.filter((child) => isProcessAlive(child));
+  if (aliveChildren.length === 0) return;
+
+  for (const child of aliveChildren) {
+    sendSignal(child, 'SIGKILL');
+  }
+
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const remaining = aliveChildren.filter((child) => isProcessAlive(child));
+    if (remaining.length === 0) {
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 100));
+  }
+
+  const lingering = aliveChildren.filter((child) => isProcessAlive(child));
+  if (lingering.length > 0) {
+    const pids = lingering.map((c) => c.pid).join(', ');
+    console.error(`[Cleanup Warning] Processes failed to exit within ${timeoutMs}ms after SIGKILL: PIDs ${pids}`);
+  }
+}
+
+export function cleanupAllSync(): void {
+  for (const child of activeProcesses) {
+    if (isProcessAlive(child)) {
+      sendSignal(child, 'SIGKILL');
     }
   }
 }
 
-process.on('exit', cleanupAll);
-process.on('SIGINT', () => {
-  cleanupAll();
-  process.exit(1);
+process.on('exit', cleanupAllSync);
+process.on('SIGINT', async () => {
+  try {
+    await cleanupAllAsync(2000);
+  } finally {
+    process.exit(1);
+  }
 });
-process.on('SIGTERM', () => {
-  cleanupAll();
-  process.exit(1);
+process.on('SIGTERM', async () => {
+  try {
+    await cleanupAllAsync(2000);
+  } finally {
+    process.exit(1);
+  }
 });
 
-async function getFreePort(): Promise<number> {
+export async function getFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
     srv.listen(0, '127.0.0.1', () => {
@@ -88,7 +162,7 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-function httpRequest(
+export function httpRequest(
   options: http.RequestOptions,
   postData?: string
 ): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
@@ -120,10 +194,10 @@ function httpRequest(
   });
 }
 
-async function waitForServerReady(child: ChildProcess, port: number, timeoutMs = 15000): Promise<void> {
+export async function waitForServerReady(child: ChildProcess, port: number, timeoutMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    if (child.exitCode !== null || child.signalCode !== null) {
+    if (!isProcessAlive(child)) {
       throw new Error(
         `Server process exited prematurely with code ${child.exitCode}, signal ${child.signalCode} before becoming ready on port ${port}`
       );
@@ -147,7 +221,7 @@ async function waitForServerReady(child: ChildProcess, port: number, timeoutMs =
   throw new Error(`Server failed to start and respond on port ${port} within ${timeoutMs}ms`);
 }
 
-async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
+export async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     const isFree = await new Promise<boolean>((resolve) => {
@@ -172,54 +246,113 @@ async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
   throw new Error(`Port ${port} was not freed within ${timeoutMs}ms`);
 }
 
-async function terminateServerGracefully(
+export interface TerminationResult {
+  code: number | null;
+  signal: string | null;
+  escalated: boolean;
+}
+
+/**
+ * Terminates a child process with bounded graceful timeout and guaranteed forced escalation.
+ *
+ * Characteristics:
+ * 1. Checks `isProcessAlive` instead of `child.killed`.
+ * 2. If already exited, immediately resolves with recorded exit state.
+ * 3. Sends `initialSignal` (e.g. SIGTERM) to process group.
+ * 4. Escalates to `SIGKILL` after `escalationDelayMs` if process remains alive.
+ * 5. Bounded hard timeout ensures no infinite hangs.
+ * 6. Explicitly observes and returns the verified `exit` event.
+ */
+export async function terminateServerGracefully(
   child: ChildProcess,
-  signal: NodeJS.Signals = 'SIGTERM',
+  initialSignal: NodeJS.Signals = 'SIGTERM',
   timeoutMs = 6000
-): Promise<{ code: number | null; signal: string | null }> {
-  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) {
-    return { code: child.exitCode, signal: child.signalCode as string | null };
+): Promise<TerminationResult> {
+  if (!child.pid || !isProcessAlive(child)) {
+    return {
+      code: child.exitCode,
+      signal: child.signalCode as string | null,
+      escalated: false,
+    };
   }
 
-  return new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+  return new Promise<TerminationResult>((resolve, reject) => {
     let settled = false;
     let forceKillTimer: NodeJS.Timeout | null = null;
     let timeoutTimer: NodeJS.Timeout | null = null;
+    let escalated = false;
 
-    const onExit = (code: number | null, sig: string | null) => {
-      if (settled) return;
+    const cleanupListenersAndTimers = () => {
       settled = true;
       if (forceKillTimer) clearTimeout(forceKillTimer);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       child.removeListener('exit', onExit);
-      resolve({ code, signal: sig });
+      child.removeListener('error', onError);
+    };
+
+    const onExit = (code: number | null, sig: string | null) => {
+      if (settled) return;
+      cleanupListenersAndTimers();
+      resolve({
+        code: code ?? child.exitCode,
+        signal: sig ?? (child.signalCode as string | null),
+        escalated,
+      });
+    };
+
+    const onError = (err: Error) => {
+      if (settled) return;
+      if (!isProcessAlive(child)) {
+        cleanupListenersAndTimers();
+        resolve({
+          code: child.exitCode,
+          signal: child.signalCode as string | null,
+          escalated,
+        });
+      }
     };
 
     child.once('exit', onExit);
+    child.once('error', onError);
 
-    // Send graceful signal first (process group or single pid)
-    killProcess(child, signal);
+    // Send initial graceful signal
+    sendSignal(child, initialSignal);
 
-    // If it doesn't exit after 75% of timeout, escalate to SIGKILL
+    // Escalation timer: if still alive after escalationDelayMs, dispatch SIGKILL
+    const escalationDelayMs = Math.min(Math.floor(timeoutMs * 0.5), Math.max(1000, timeoutMs - 2000));
     forceKillTimer = setTimeout(() => {
-      if (!settled && !child.killed && child.exitCode === null && child.signalCode === null) {
-        killProcess(child, 'SIGKILL');
+      if (!settled && isProcessAlive(child)) {
+        escalated = true;
+        sendSignal(child, 'SIGKILL');
       }
-    }, Math.floor(timeoutMs * 0.75));
+    }, escalationDelayMs);
 
     // Hard bounded timeout
     timeoutTimer = setTimeout(() => {
       if (!settled) {
-        settled = true;
-        child.removeListener('exit', onExit);
-        killProcess(child, 'SIGKILL');
-        reject(new Error(`Process ${child.pid} did not exit within ${timeoutMs}ms after ${signal}`));
+        if (isProcessAlive(child)) {
+          // Final forced SIGKILL
+          sendSignal(child, 'SIGKILL');
+          cleanupListenersAndTimers();
+          reject(
+            new Error(
+              `Process PID ${child.pid} did not exit within ${timeoutMs}ms after ${initialSignal} (escalated: ${escalated})`
+            )
+          );
+        } else {
+          cleanupListenersAndTimers();
+          resolve({
+            code: child.exitCode,
+            signal: child.signalCode as string | null,
+            escalated,
+          });
+        }
       }
     }, timeoutMs);
   });
 }
 
-function spawnProductionServer(port: number): ChildProcess {
+export function spawnProductionServer(port: number): ChildProcess {
   const tsxBin = path.resolve('node_modules/.bin/tsx');
   const child = spawn(tsxBin, ['server.ts'], {
     env: {
@@ -246,14 +379,14 @@ function spawnProductionServer(port: number): ChildProcess {
   return child;
 }
 
-function assert(condition: boolean, message: string) {
+export function assert(condition: boolean, message: string) {
   if (!condition) {
     throw new Error(`Assertion failed: ${message}`);
   }
   console.log(`  ✓ ${message}`);
 }
 
-async function runProductionSmokeTests() {
+export async function runProductionSmokeTests() {
   console.log('\n=============================================================');
   console.log('ParandO Local Production Smoke Verification Suite');
   console.log('Scope: LOCAL PRODUCTION-GRADE DELIVERY');
@@ -266,7 +399,7 @@ async function runProductionSmokeTests() {
   }
 
   // Assertion 7: Production HTML sanitization
-  console.log('[Test 1/11] Validating production index.html build sanitization...');
+  console.log('[Test 1/12] Validating production index.html build sanitization...');
   const distHtml = fs.readFileSync(distHtmlPath, 'utf8');
   assert(!distHtml.includes('<!--DEV_ONLY_SCRIPT_START-->'), 'dist/index.html does not contain DEV_ONLY_SCRIPT_START marker');
   assert(!distHtml.includes('<!--DEV_ONLY_SCRIPT_END-->'), 'dist/index.html does not contain DEV_ONLY_SCRIPT_END marker');
@@ -283,7 +416,7 @@ async function runProductionSmokeTests() {
   const port = await getFreePort();
   console.log(`\nAllocated dynamic ephemeral port: ${port}`);
 
-  console.log(`\n[Test 2/11] Spawning production server on port ${port}...`);
+  console.log(`\n[Test 2/12] Spawning production server on port ${port}...`);
   let serverProcess = spawnProductionServer(port);
 
   try {
@@ -291,7 +424,7 @@ async function runProductionSmokeTests() {
     console.log(`Production server successfully ready and listening on port ${port}`);
 
     // Assertion 1: GET /health
-    console.log('\n[Test 3/11] Testing GET /health...');
+    console.log('\n[Test 3/12] Testing GET /health...');
     const healthRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -306,7 +439,7 @@ async function runProductionSmokeTests() {
     assert(Array.isArray(healthJson.standards) && healthJson.standards.includes('ADR-001'), 'GET /health lists ADR standards');
 
     // Assertion 2: GET /api/v1/health
-    console.log('\n[Test 4/11] Testing GET /api/v1/health...');
+    console.log('\n[Test 4/12] Testing GET /api/v1/health...');
     const v1HealthRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -319,7 +452,7 @@ async function runProductionSmokeTests() {
     assert(v1HealthJson.service === 'parando-auction-ecosystem', 'GET /api/v1/health service matches');
 
     // Assertion 3: GET / (Root HTML)
-    console.log('\n[Test 5/11] Testing GET / (root static HTML delivery)...');
+    console.log('\n[Test 5/12] Testing GET / (root static HTML delivery)...');
     const rootRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -332,7 +465,7 @@ async function runProductionSmokeTests() {
     assert(rootRes.body.includes('<div id="root">'), 'GET / contains SPA root container');
 
     // Assertion 4: GET /competitions/COMP-GOLD-001 (SPA route fallback)
-    console.log('\n[Test 6/11] Testing GET /competitions/COMP-GOLD-001 (SPA fallback)...');
+    console.log('\n[Test 6/12] Testing GET /competitions/COMP-GOLD-001 (SPA fallback)...');
     const spaRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -344,7 +477,7 @@ async function runProductionSmokeTests() {
     assert(spaRes.body.includes('<div id="root">'), 'SPA fallback serves index.html with root container');
 
     // Assertion 5: GET /api/v1/competitions
-    console.log('\n[Test 7/11] Testing GET /api/v1/competitions (API routing)...');
+    console.log('\n[Test 7/12] Testing GET /api/v1/competitions (API routing)...');
     const apiRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -358,7 +491,7 @@ async function runProductionSmokeTests() {
     assert(comps.some((c: any) => c.competition_id === 'COMP-GOLD-001'), 'Gold auction (COMP-GOLD-001) is present');
 
     // Assertion 6: GET /api/v1/nonexistent (Unknown API route 404)
-    console.log('\n[Test 8/11] Testing GET /api/v1/nonexistent (404 JSON for unknown API routes)...');
+    console.log('\n[Test 8/12] Testing GET /api/v1/nonexistent (404 JSON for unknown API routes)...');
     const notFoundRes = await httpRequest({
       hostname: '127.0.0.1',
       port,
@@ -371,7 +504,7 @@ async function runProductionSmokeTests() {
     assert(notFoundJson.detail === 'API endpoint not found', '404 JSON detail matches expected message');
 
     // Assertion 8: Real application WebSocket handshake on /ws
-    console.log('\n[Test 9/11] Testing WebSocket connection on ws://127.0.0.1:' + port + '/ws...');
+    console.log('\n[Test 9/12] Testing WebSocket connection on ws://127.0.0.1:' + port + '/ws...');
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`);
       let presenceReceived = false;
@@ -395,7 +528,6 @@ async function runProductionSmokeTests() {
       };
 
       ws.on('open', () => {
-        // Send string ping
         ws.send('ping');
       });
 
@@ -403,7 +535,6 @@ async function runProductionSmokeTests() {
         const text = data.toString();
         if (text === 'pong') {
           pongStringReceived = true;
-          // Send JSON PING
           ws.send(JSON.stringify({ type: 'PING' }));
           return;
         }
@@ -435,7 +566,7 @@ async function runProductionSmokeTests() {
     });
 
     // Assertion 9: WebSocket connection on /ws/competitions/COMP-GOLD-001
-    console.log('\n[Test 10/11] Testing WebSocket competition snapshot on ws://127.0.0.1:' + port + '/ws/competitions/COMP-GOLD-001...');
+    console.log('\n[Test 10/12] Testing WebSocket competition snapshot on ws://127.0.0.1:' + port + '/ws/competitions/COMP-GOLD-001...');
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/competitions/COMP-GOLD-001`);
       let settled = false;
@@ -477,7 +608,7 @@ async function runProductionSmokeTests() {
     });
 
     // Assertion 10: Unsupported WebSocket upgrade path rejection
-    console.log('\n[Test 11/11 part A] Testing unsupported WebSocket upgrade path rejection (/invalid-ws-route)...');
+    console.log('\n[Test 11/12 part A] Testing unsupported WebSocket upgrade path rejection (/invalid-ws-route)...');
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/invalid-ws-route`);
       let settled = false;
@@ -521,7 +652,7 @@ async function runProductionSmokeTests() {
     });
 
     // Assertion 11: Graceful shutdown and clean restart on identical port
-    console.log('\n[Test 11/11 part B] Testing graceful shutdown (SIGTERM) and port recovery on same port ' + port + '...');
+    console.log('\n[Test 11/12 part B] Testing graceful shutdown (SIGTERM) and port recovery on same port ' + port + '...');
     const exitResult1 = await terminateServerGracefully(serverProcess, 'SIGTERM', 6000);
     assert(
       exitResult1.code === 0 || exitResult1.signal === 'SIGTERM',
@@ -555,16 +686,65 @@ async function runProductionSmokeTests() {
     await waitForPortFree(port);
     assert(true, `Restarted server port ${port} released`);
 
+    // Assertion 12: Forced-termination escalation (SIGKILL) on unresponsive process
+    console.log('\n[Test 12/12] Testing forced-termination escalation (SIGKILL) on unresponsive process...');
+    const stubbornChild = await new Promise<ChildProcess>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        ['-e', 'process.on("SIGTERM", () => { /* trap and ignore */ }); console.log("STUBBORN_READY"); setInterval(() => {}, 500);'],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: process.platform !== 'win32',
+        }
+      );
+      registerChild(child);
+      const timer = setTimeout(() => reject(new Error('Timeout waiting for stubborn child STUBBORN_READY')), 4000);
+      child.stdout?.on('data', (d) => {
+        if (d.toString().includes('STUBBORN_READY')) {
+          clearTimeout(timer);
+          resolve(child);
+        }
+      });
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.on('exit', (code, sig) => {
+        clearTimeout(timer);
+        reject(new Error(`Stubborn child exited prematurely (code: ${code}, signal: ${sig})`));
+      });
+    });
+
+    const stubbornPid = stubbornChild.pid;
+    assert(typeof stubbornPid === 'number', `Spawned stubborn child process with PID ${stubbornPid}`);
+    assert(isProcessAlive(stubbornChild), `Stubborn child PID ${stubbornPid} is confirmed alive and signal trap ready`);
+
+    const escalationResult = await terminateServerGracefully(stubbornChild, 'SIGTERM', 3500);
+    assert(escalationResult.escalated === true, 'Forced-termination escalation to SIGKILL was triggered');
+    assert(escalationResult.signal === 'SIGKILL', `Stubborn child terminated via kernel SIGKILL (signal: ${escalationResult.signal})`);
+    assert(!isProcessAlive(stubbornChild), `Stubborn child PID ${stubbornPid} confirmed completely terminated`);
+
     console.log('\n=============================================================');
     console.log('ALL LOCAL PRODUCTION SMOKE TESTS PASSED (100% SUCCESS)');
     console.log('=============================================================\n');
   } finally {
-    cleanupAll();
+    await cleanupAllAsync(3000);
   }
 }
 
-runProductionSmokeTests().catch((err) => {
-  console.error('\nSMOKE TEST SUITE FAILED:', err);
-  cleanupAll();
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve('scripts/production_smoke.ts')) {
+  runProductionSmokeTests()
+    .then(() => {
+      process.exit(0);
+    })
+    .catch(async (primaryError) => {
+      console.error('\nSMOKE TEST SUITE FAILED:', primaryError);
+      try {
+        await cleanupAllAsync(3000);
+      } catch (cleanupErr) {
+        console.error('Error during post-failure cleanup:', cleanupErr);
+      } finally {
+        process.exit(1);
+      }
+    });
+}

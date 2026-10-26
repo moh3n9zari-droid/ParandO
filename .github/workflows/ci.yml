@@ -26,4 +26,6 @@ jobs:
         run: npm run build
       - name: Production smoke tests
         run: npm run test:smoke
+      - name: Process escalation regression test
+        run: npm run test:escalation
 
