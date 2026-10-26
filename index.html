@@ -3,16 +3,67 @@
   <head>
     <script>
       (function () {
-        // AI Studio runtime constraint: HMR WebSockets are not forwarded by the preview proxy.
-        // Narrowly handle Vite internal HMR transport errors without swallowing application WebSocket errors.
+        // AI Studio runtime constraint: HMR is disabled in this environment.
+        // Intercept Vite HMR WebSocket so that createWebSocketModuleRunnerTransport resolves cleanly without errors.
+        var OrigWebSocket = window.WebSocket;
+        if (typeof OrigWebSocket !== 'undefined') {
+          function ViteMockWebSocket(url, protocols) {
+            var protoStr = Array.isArray(protocols) ? protocols.join(',') : String(protocols || '');
+            var urlStr = String(url || '');
+            if (
+              protoStr.includes('vite') ||
+              urlStr.includes('vite') ||
+              urlStr.includes('createWebSocketModuleRunnerTransport')
+            ) {
+              var listeners = {};
+              return {
+                url: urlStr,
+                protocol: protoStr,
+                readyState: 1, // WebSocket.OPEN
+                OPEN: 1,
+                CLOSED: 3,
+                CLOSING: 2,
+                CONNECTING: 0,
+                send: function () {},
+                close: function () {},
+                addEventListener: function (type, listener) {
+                  listeners[type] = listeners[type] || [];
+                  listeners[type].push(listener);
+                  if (type === 'open') {
+                    setTimeout(function () {
+                      try {
+                        listener({ type: 'open' });
+                      } catch (e) {}
+                    }, 0);
+                  }
+                },
+                removeEventListener: function (type, listener) {
+                  if (listeners[type]) {
+                    listeners[type] = listeners[type].filter(function (l) { return l !== listener; });
+                  }
+                },
+                dispatchEvent: function () { return true; }
+              };
+            }
+            return new OrigWebSocket(url, protocols);
+          }
+          ViteMockWebSocket.prototype = OrigWebSocket.prototype;
+          ViteMockWebSocket.CONNECTING = 0;
+          ViteMockWebSocket.OPEN = 1;
+          ViteMockWebSocket.CLOSING = 2;
+          ViteMockWebSocket.CLOSED = 3;
+          window.WebSocket = ViteMockWebSocket;
+        }
+
+        // Prevent any remaining Vite HMR WebSocket connection errors from bubbling up to error overlays
         var origConsoleError = console.error;
         console.error = function () {
           var firstArg = arguments[0];
           var msg = typeof firstArg === 'string' ? firstArg : (firstArg && (firstArg.message || firstArg.stack)) || '';
           if (
             msg.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('WebSocket closed without opened.') ||
-            (msg.includes('[vite]') && msg.includes('connect'))
+            msg.includes('WebSocket closed without opened') ||
+            (msg.includes('[vite]') && (msg.includes('connect') || msg.includes('websocket') || msg.includes('WebSocket') || msg.includes('Direct')))
           ) {
             return;
           }
@@ -21,10 +72,13 @@
         window.addEventListener('error', function (event) {
           var msg = event && event.message ? String(event.message) : '';
           var src = event && event.filename ? String(event.filename) : '';
+          var stack = event && event.error && event.error.stack ? String(event.error.stack) : '';
           if (
             src.includes('@vite/client') ||
             msg.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('WebSocket closed without opened.')
+            stack.includes('createWebSocketModuleRunnerTransport') ||
+            msg.includes('WebSocket closed without opened') ||
+            (msg.includes('[vite]') && msg.includes('connect'))
           ) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -35,7 +89,7 @@
           var reason = event && event.reason ? String(event.reason.message || event.reason.stack || event.reason) : '';
           if (
             reason.includes('createWebSocketModuleRunnerTransport') ||
-            reason.includes('WebSocket closed without opened.') ||
+            reason.includes('WebSocket closed without opened') ||
             (reason.includes('[vite]') && reason.includes('connect'))
           ) {
             event.preventDefault();
