@@ -1,6 +1,7 @@
 <!doctype html>
 <html lang="fa" dir="rtl">
   <head>
+    <!--DEV_ONLY_SCRIPT_START-->
     <script>
       (function () {
         // AI Studio runtime constraint: HMR is disabled in this environment.
@@ -10,15 +11,16 @@
           function ViteMockWebSocket(url, protocols) {
             var protoStr = Array.isArray(protocols) ? protocols.join(',') : String(protocols || '');
             var urlStr = String(url || '');
+            // Strictly match ONLY the Vite HMR internal transport protocol ('vite-hmr')
             if (
-              protoStr.includes('vite') ||
-              urlStr.includes('vite') ||
-              urlStr.includes('createWebSocketModuleRunnerTransport')
+              protocols === 'vite-hmr' ||
+              (Array.isArray(protocols) && protocols.includes('vite-hmr')) ||
+              protoStr.includes('vite-hmr')
             ) {
               var listeners = {};
               return {
                 url: urlStr,
-                protocol: protoStr,
+                protocol: 'vite-hmr',
                 readyState: 1, // WebSocket.OPEN
                 OPEN: 1,
                 CLOSED: 3,
@@ -62,7 +64,7 @@
           var msg = typeof firstArg === 'string' ? firstArg : (firstArg && (firstArg.message || firstArg.stack)) || '';
           if (
             msg.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('WebSocket closed without opened') ||
+            (msg.includes('WebSocket closed without opened') && msg.includes('@vite/client')) ||
             (msg.includes('[vite]') && (msg.includes('connect') || msg.includes('websocket') || msg.includes('WebSocket') || msg.includes('Direct')))
           ) {
             return;
@@ -70,15 +72,12 @@
           return origConsoleError.apply(console, arguments);
         };
         window.addEventListener('error', function (event) {
-          var msg = event && event.message ? String(event.message) : '';
           var src = event && event.filename ? String(event.filename) : '';
+          var msg = event && event.message ? String(event.message) : '';
           var stack = event && event.error && event.error.stack ? String(event.error.stack) : '';
           if (
-            src.includes('@vite/client') ||
-            msg.includes('createWebSocketModuleRunnerTransport') ||
-            stack.includes('createWebSocketModuleRunnerTransport') ||
-            msg.includes('WebSocket closed without opened') ||
-            (msg.includes('[vite]') && msg.includes('connect'))
+            src.includes('@vite/client') &&
+            (msg.includes('WebSocket') || stack.includes('createWebSocketModuleRunnerTransport') || msg.includes('createWebSocketModuleRunnerTransport'))
           ) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -89,8 +88,7 @@
           var reason = event && event.reason ? String(event.reason.message || event.reason.stack || event.reason) : '';
           if (
             reason.includes('createWebSocketModuleRunnerTransport') ||
-            reason.includes('WebSocket closed without opened') ||
-            (reason.includes('[vite]') && reason.includes('connect'))
+            (reason.includes('WebSocket closed without opened') && reason.includes('vite'))
           ) {
             event.preventDefault();
             event.stopImmediatePropagation();
@@ -98,6 +96,7 @@
         });
       })();
     </script>
+    <!--DEV_ONLY_SCRIPT_END-->
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
     <title>Parando National Auction Ecosystem (حراج ملی پرندو)</title>

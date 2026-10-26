@@ -82,6 +82,15 @@ export default defineConfig({
         type: 'module',
       },
     }),
+    {
+      name: 'strip-dev-only-scripts',
+      transformIndexHtml(html, ctx) {
+        if (ctx.bundle) {
+          return html.replace(/<!--DEV_ONLY_SCRIPT_START-->[\s\S]*?<!--DEV_ONLY_SCRIPT_END-->\s*/g, '');
+        }
+        return html;
+      },
+    },
   ],
   server: {
     host: '0.0.0.0',

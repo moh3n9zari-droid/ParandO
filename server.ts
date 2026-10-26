@@ -179,8 +179,8 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // Health check API
-  app.get('/health', (_req, res) => {
+  // Health check API (/health and /api/v1/health)
+  const handleHealth = (_req: express.Request, res: express.Response) => {
     res.json({
       status: 'healthy',
       service: 'parando-auction-ecosystem',
@@ -188,7 +188,9 @@ async function startServer() {
       kernel_conformance: ['ADR-001', 'ADR-002', 'TR-01', 'TR-12', 'TR-13'],
       timestamp: new Date().toISOString(),
     });
-  });
+  };
+  app.get('/health', handleHealth);
+  app.get('/api/v1/health', handleHealth);
 
   // Competitions REST API
   app.get('/api/v1/competitions', (_req, res) => {
@@ -630,6 +632,11 @@ async function startServer() {
     });
   });
 
+  // 404 handler for unknown API routes
+  app.all('/api/{*splat}', (_req, res) => {
+    res.status(404).json({ detail: 'API endpoint not found' });
+  });
+
   // Mount Vite in dev mode
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
@@ -654,6 +661,24 @@ async function startServer() {
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ParandO] Server and WebSocket live on http://0.0.0.0:${PORT}`);
   });
+
+  const shutdown = () => {
+    console.log('[ParandO] Received shutdown signal, closing server...');
+    wss.close();
+    for (const client of connectedClients) {
+      client.terminate();
+    }
+    server.close(() => {
+      console.log('[ParandO] Server and WebSockets closed gracefully');
+      process.exit(0);
+    });
+    setTimeout(() => {
+      process.exit(0);
+    }, 2000).unref();
+  };
+
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
 }
 
 startServer().catch((err) => {
