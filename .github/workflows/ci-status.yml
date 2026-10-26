@@ -1,0 +1,41 @@
+name: CI Status Publisher
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write status file
+        run: |
+          mkdir -p /tmp/out
+          cat > /tmp/out/latest.json <<EOF
+          {
+            "workflow": "${{ github.event.workflow_run.name }}",
+            "run_number": ${{ github.event.workflow_run.run_number }},
+            "commit": "${{ github.event.workflow_run.head_sha }}",
+            "status": "${{ github.event.workflow_run.status }}",
+            "conclusion": "${{ github.event.workflow_run.conclusion }}",
+            "url": "${{ github.event.workflow_run.html_url }}",
+            "updated_at": "${{ github.event.workflow_run.updated_at }}"
+          }
+          EOF
+
+      - name: Publish to ci-status branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan ci-status
+          git rm -rf . > /dev/null 2>&1 || true
+          cp /tmp/out/latest.json ./latest.json
+          git add latest.json
+          git commit -m "CI status for ${{ github.event.workflow_run.head_sha }}"
+          git push --force origin ci-status
