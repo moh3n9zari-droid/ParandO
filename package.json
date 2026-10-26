@@ -11,6 +11,7 @@
     "test": "tsx -e \"import { runAllCoreTests } from './src/core/tests_suite'; const res = runAllCoreTests(); const failed = res.filter(r => r.status === 'failed'); console.log('Passed ' + (res.length - failed.length) + '/' + res.length + ' tests'); if (failed.length > 0) { failed.forEach(f => console.error('FAILED:', f.name, f.error)); process.exit(1); }\"",
     "test:smoke": "tsx scripts/production_smoke.ts",
     "test:escalation": "tsx scripts/test_termination_escalation.ts",
+    "test:failure-cleanup": "tsx scripts/test_failure_cleanup.ts",
     "preview": "vite preview --port 3000"
   },
   "dependencies": {

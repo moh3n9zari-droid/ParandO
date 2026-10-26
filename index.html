@@ -94,6 +94,28 @@
             event.stopImmediatePropagation();
           }
         });
+        var originalOnUnhandled = window.onunhandledrejection;
+        try {
+          Object.defineProperty(window, 'onunhandledrejection', {
+            get: function () { return originalOnUnhandled; },
+            set: function (fn) {
+              originalOnUnhandled = function (event) {
+                var reason = event && event.reason ? String(event.reason.message || event.reason.stack || event.reason) : '';
+                if (
+                  reason.includes('createWebSocketModuleRunnerTransport') ||
+                  (reason.includes('WebSocket closed without opened') && reason.includes('vite'))
+                ) {
+                  return;
+                }
+                if (typeof fn === 'function') {
+                  return fn.call(this, event);
+                }
+              };
+            },
+            configurable: true,
+            enumerable: true
+          });
+        } catch (e) {}
       })();
     </script>
     <!--DEV_ONLY_SCRIPT_END-->

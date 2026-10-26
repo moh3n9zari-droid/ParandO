@@ -1,3 +1,12 @@
+// In tsx/Node 22 environments, tsx defines global.__dirname as '.' which causes
+// ESM packages like vite-plugin-pwa (using createRequire(_dirname)) to fail.
+if ((globalThis as any).__dirname === '.') {
+  delete (globalThis as any).__dirname;
+}
+if ((globalThis as any).__filename === '.') {
+  delete (globalThis as any).__filename;
+}
+
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -539,10 +548,19 @@ async function startServer() {
 
   server.on('upgrade', (request, socket, head) => {
     const url = request.url || '';
+    const protocol = request.headers['sec-websocket-protocol'];
     if (url.startsWith('/ws')) {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
+    } else if (
+      protocol === 'vite-hmr' ||
+      protocol === 'vite-ping' ||
+      url.startsWith('/@vite') ||
+      url.includes('token=')
+    ) {
+      // Allow Vite HMR to process this upgrade request
+      return;
     } else {
       socket.destroy();
     }
@@ -641,7 +659,7 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true, hmr: false },
+      server: { middlewareMode: true, hmr: { server } },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -657,7 +675,28 @@ async function startServer() {
     });
   }
 
-  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
+  function resolvePort(): number {
+    const portArgIdx = process.argv.indexOf('--port');
+    if (portArgIdx !== -1 && process.argv[portArgIdx + 1]) {
+      const p = parseInt(process.argv[portArgIdx + 1], 10);
+      if (!isNaN(p)) return p;
+    }
+    if (process.env.NODE_ENV !== 'production') {
+      return 3000;
+    }
+    if (process.env.APP_PORT) {
+      return parseInt(process.env.APP_PORT, 10);
+    }
+    if (process.env.PORT && process.env.PORT !== '8080') {
+      return parseInt(process.env.PORT, 10);
+    }
+    return 3000;
+  }
+
+  const PORT = resolvePort();
+  server.on('error', (err: any) => {
+    console.error('[ParandO] HTTP server error:', err);
+  });
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ParandO] Server and WebSocket live on http://0.0.0.0:${PORT}`);
   });

@@ -37,6 +37,16 @@ export function registerChild(child: ChildProcess): void {
   });
 }
 
+export function isPidAlive(pid: number): boolean {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Determine whether a process is still alive in the operating system.
  * CRITICAL: Never relies on `child.killed`, which in Node.js only indicates
@@ -45,12 +55,7 @@ export function registerChild(child: ChildProcess): void {
 export function isProcessAlive(child: ChildProcess): boolean {
   if (!child.pid) return false;
   if (child.exitCode !== null || child.signalCode !== null) return false;
-  try {
-    process.kill(child.pid, 0);
-    return true;
-  } catch (err: any) {
-    return false;
-  }
+  return isPidAlive(child.pid);
 }
 
 /**
@@ -116,7 +121,9 @@ export async function cleanupAllAsync(timeoutMs = 3000): Promise<void> {
   const lingering = aliveChildren.filter((child) => isProcessAlive(child));
   if (lingering.length > 0) {
     const pids = lingering.map((c) => c.pid).join(', ');
-    console.error(`[Cleanup Warning] Processes failed to exit within ${timeoutMs}ms after SIGKILL: PIDs ${pids}`);
+    const cleanupError = new Error(`[Cleanup Failure] Processes failed to exit within ${timeoutMs}ms after SIGKILL: PIDs ${pids}`);
+    console.error(cleanupError.message);
+    throw cleanupError;
   }
 }
 
@@ -407,11 +414,6 @@ export async function runProductionSmokeTests() {
   assert(!distHtml.includes('createWebSocketModuleRunnerTransport'), 'dist/index.html does not contain createWebSocketModuleRunnerTransport');
   assert(distHtml.includes('<div id="root">'), 'dist/index.html contains root mount node');
 
-  // Controlled negative check trigger
-  if (process.env.SMOKE_FORCE_FAIL === '1') {
-    throw new Error('Controlled negative test: simulated assertion failure in production smoke runner');
-  }
-
   // Allocate dynamic ephemeral port
   const port = await getFreePort();
   console.log(`\nAllocated dynamic ephemeral port: ${port}`);
@@ -421,7 +423,14 @@ export async function runProductionSmokeTests() {
 
   try {
     await waitForServerReady(serverProcess, port);
-    console.log(`Production server successfully ready and listening on port ${port}`);
+    console.log(`Production server successfully ready and listening on port ${port} (PID: ${serverProcess.pid})`);
+
+    // Controlled negative check trigger: only executes AFTER the server is verified ready
+    if (process.env.SMOKE_FORCE_FAIL === '1' || process.env.SMOKE_FAIL_AFTER_READY === '1') {
+      console.log(`\n[CONTROLLED FAILURE TRIGGER] Server verified healthy and ready on port ${port} (PID: ${serverProcess.pid}).`);
+      console.log('[CONTROLLED FAILURE TRIGGER] Triggering deliberate post-readiness assertion failure to verify cleanup...');
+      assert(false, 'Controlled post-readiness failure: simulated test failure while production server is actively running');
+    }
 
     // Assertion 1: GET /health
     console.log('\n[Test 3/12] Testing GET /health...');
