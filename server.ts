@@ -37,6 +37,14 @@ import {
   Offer,
 } from './src/core/competition_kernel';
 import { MARKET_MODULES } from './src/data/market_modules';
+import {
+  authenticateRequest,
+  requireAuth,
+  requireRole,
+  AuthenticatedPrincipal,
+  UserRole,
+} from './src/auth/auth_service';
+
 
 // ---------------------------------------------------------------------------
 // In-Memory State
@@ -187,8 +195,31 @@ async function startServer() {
   const app = express();
   app.use(cors());
   app.use(express.json());
+  app.use(authenticateRequest);
 
-  // Health check API (/health and /api/v1/health)
+  // Helper: Log security alerts without leaking secrets or tokens
+  function auditSecurityAlert(alert: {
+    sub_type: string;
+    reason: string;
+    path: string;
+    method: string;
+    principal_id?: string | null;
+    tenant_id?: string | null;
+  }) {
+    auditEvents.unshift({
+      timestamp: new Date().toISOString(),
+      event_type: 'SECURITY_ALERT',
+      sub_type: alert.sub_type,
+      reason: alert.reason,
+      path: alert.path,
+      method: alert.method,
+      principal_id: alert.principal_id || null,
+      tenant_id: alert.tenant_id || null,
+    });
+    if (auditEvents.length > 200) auditEvents.pop();
+  }
+
+  // Health check API (/health and /api/v1/health) - Preserved Public
   const handleHealth = (_req: express.Request, res: express.Response) => {
     res.json({
       status: 'healthy',
@@ -201,35 +232,90 @@ async function startServer() {
   app.get('/health', handleHealth);
   app.get('/api/v1/health', handleHealth);
 
-  // Competitions REST API
+  // Competitions REST API - Preserved Public Read-Only
   app.get('/api/v1/competitions', (_req, res) => {
     const list = Array.from(competitionsMap.values()).map(serializeCompetition);
     res.json(list);
   });
 
-  app.post('/api/v1/competitions', (req, res) => {
-    const { competition_id, tenant_id, seller_id, base_price, min_increment, deposit_rate_bps, duration_minutes, ladder_size } = req.body;
-    if (competitionsMap.has(competition_id)) {
-      res.status(409).json({ detail: `Competition '${competition_id}' already exists` });
-      return;
+  // Create Competition - Sensitive: Restricted to SELLER or EXCHANGE_ADMIN
+  app.post(
+    '/api/v1/competitions',
+    requireAuth,
+    requireRole(['SELLER', 'EXCHANGE_ADMIN']),
+    (req, res) => {
+      const {
+        competition_id,
+        tenant_id,
+        seller_id,
+        base_price,
+        min_increment,
+        deposit_rate_bps,
+        duration_minutes,
+        ladder_size,
+      } = req.body;
+
+      const principal = req.principal!;
+
+      // Tenant isolation check
+      if (principal.tenantId !== tenant_id) {
+        auditSecurityAlert({
+          sub_type: 'TENANT_MISMATCH',
+          reason: `Principal tenant '${principal.tenantId}' does not match target tenant '${tenant_id}'`,
+          path: req.path,
+          method: req.method,
+          principal_id: principal.userId,
+          tenant_id: principal.tenantId,
+        });
+        res.status(403).json({
+          error: 'FORBIDDEN',
+          detail: `TENANT_MISMATCH: Authenticated tenant '${principal.tenantId}' does not match competition tenant '${tenant_id}'`,
+        });
+        return;
+      }
+
+      // Ownership check: Non-admin sellers can only create competitions under their own identity
+      if (principal.roles.includes('SELLER') && !principal.roles.includes('EXCHANGE_ADMIN')) {
+        if (principal.userId !== seller_id) {
+          auditSecurityAlert({
+            sub_type: 'OWNERSHIP_MISMATCH',
+            reason: `Seller principal '${principal.userId}' attempted to create competition under '${seller_id}'`,
+            path: req.path,
+            method: req.method,
+            principal_id: principal.userId,
+            tenant_id: principal.tenantId,
+          });
+          res.status(403).json({
+            error: 'FORBIDDEN',
+            detail: `OWNERSHIP_MISMATCH: Seller can only create competitions under their own verified identity '${principal.userId}'`,
+          });
+          return;
+        }
+      }
+
+      if (competitionsMap.has(competition_id)) {
+        res.status(409).json({ detail: `Competition '${competition_id}' already exists` });
+        return;
+      }
+
+      const now = new Date();
+      const rules = new CompetitionRules(base_price, min_increment, deposit_rate_bps);
+      const comp = new Competition({
+        competitionId: competition_id,
+        tenantId: tenant_id,
+        sellerId: seller_id,
+        rules,
+        startsAt: now,
+        endsAt: new Date(now.getTime() + (duration_minutes || 60) * 60 * 1000),
+        status: CompetitionStatus.ACTIVE,
+        ladderSize: ladder_size || 5,
+      });
+      competitionsMap.set(comp.competitionId, comp);
+      res.status(201).json(serializeCompetition(comp));
     }
+  );
 
-    const now = new Date();
-    const rules = new CompetitionRules(base_price, min_increment, deposit_rate_bps);
-    const comp = new Competition({
-      competitionId: competition_id,
-      tenantId: tenant_id,
-      sellerId: seller_id,
-      rules,
-      startsAt: now,
-      endsAt: new Date(now.getTime() + (duration_minutes || 60) * 60 * 1000),
-      status: CompetitionStatus.ACTIVE,
-      ladderSize: ladder_size || 5,
-    });
-    competitionsMap.set(comp.competitionId, comp);
-    res.status(201).json(serializeCompetition(comp));
-  });
-
+  // Single competition details & ladder - Preserved Public Read-Only
   app.get('/api/v1/competitions/:competition_id', (req, res) => {
     const comp = competitionsMap.get(req.params.competition_id);
     if (!comp) {
@@ -252,8 +338,8 @@ async function startServer() {
     res.json(ladder);
   });
 
-  // Submit Offer (with TR-12 Idempotency)
-  app.post('/api/v1/competitions/:competition_id/offers', (req, res) => {
+  // Submit Offer (with Server-Enforced Auth, Role, Tenant Isolation, Ownership & TR-12)
+  app.post('/api/v1/competitions/:competition_id/offers', requireAuth, (req, res) => {
     const compId = req.params.competition_id;
     const comp = competitionsMap.get(compId);
     if (!comp) {
@@ -261,15 +347,103 @@ async function startServer() {
       return;
     }
 
+    const principal = req.principal!;
+
+    // 1. Role Authorization: Must have OFFERER role
+    if (!principal.roles.includes('OFFERER')) {
+      auditSecurityAlert({
+        sub_type: 'UNAUTHORIZED_ROLE',
+        reason: `Principal '${principal.userId}' lacks OFFERER role to place offers`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: 'INSUFFICIENT_PERMISSIONS: Offerer role required to submit offers',
+      });
+      return;
+    }
+
+    // 2. Server-verified Eligibility check: Client-supplied isEligible is NEVER trusted
+    if (!principal.isEligible) {
+      auditSecurityAlert({
+        sub_type: 'INELIGIBLE_OFFERER',
+        reason: `Principal '${principal.userId}' is marked not eligible on server`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: 'OFFERER_NOT_ELIGIBLE: Offerer is not eligible to participate in competitions',
+      });
+      return;
+    }
+
+    // 3. Tenant Isolation: Offerer tenant must strictly match competition tenant
+    if (principal.tenantId !== comp.tenantId) {
+      auditSecurityAlert({
+        sub_type: 'TENANT_MISMATCH',
+        reason: `Offerer tenant '${principal.tenantId}' does not match competition tenant '${comp.tenantId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: `TENANT_MISMATCH: Offerer tenant '${principal.tenantId}' cannot participate in competition tenant '${comp.tenantId}'`,
+      });
+      return;
+    }
+
+    // 4. Ownership & Identity Spoofing Protection:
+    // If client supplied offerer_id or tenant_id, reject if mismatched
+    if (req.body.offerer_id && req.body.offerer_id !== principal.userId) {
+      auditSecurityAlert({
+        sub_type: 'IDENTITY_SPOOFING_ATTEMPT',
+        reason: `Client offerer_id '${req.body.offerer_id}' mismatched principal '${principal.userId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: `IDENTITY_MISMATCH: Client-supplied offerer_id '${req.body.offerer_id}' does not match authenticated principal '${principal.userId}'`,
+      });
+      return;
+    }
+
+    if (req.body.tenant_id && req.body.tenant_id !== principal.tenantId) {
+      auditSecurityAlert({
+        sub_type: 'TENANT_SPOOFING_ATTEMPT',
+        reason: `Client tenant_id '${req.body.tenant_id}' mismatched principal '${principal.tenantId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: 'TENANT_MISMATCH: Client-supplied tenant_id does not match authenticated principal',
+      });
+      return;
+    }
+
+    // 5. Build Offerer strictly from server-verified principal
+    const offerer: Offerer = {
+      offererId: principal.userId,
+      tenantId: principal.tenantId,
+      isEligible: principal.isEligible,
+    };
+
     const headerKey = req.headers['idempotency-key'] as string | undefined;
     const idemKey = headerKey || req.body.idempotency_key;
     const offerId = req.body.offer_id || `off-${crypto.randomUUID().slice(0, 8)}`;
-
-    const offerer: Offerer = {
-      offererId: req.body.offerer_id,
-      tenantId: req.body.tenant_id,
-      isEligible: true,
-    };
 
     const cmd: SubmitOfferCommand = {
       competitionId: compId,
@@ -325,17 +499,18 @@ async function startServer() {
         ) {
           res.status(400).json({ detail: `COMPETITION_NOT_ACTIVE: ${err.message}` });
         } else {
-          res.status(500).json({ detail: err.message || 'Internal Server Error' });
+          res.status(500).json({ error: 'INTERNAL_SERVER_ERROR', detail: 'An unexpected processing error occurred' });
         }
         return;
       }
     }
 
-    // Record audit event
+    // Record audit event with tenant scoping
     auditEvents.unshift({
       timestamp: new Date().toISOString(),
       competition_id: compId,
-      offerer_id: req.body.offerer_id,
+      tenant_id: comp.tenantId,
+      offerer_id: principal.userId,
       amount: req.body.amount,
       rank: result.rank,
       is_replay: isReplay,
@@ -380,30 +555,80 @@ async function startServer() {
     });
   });
 
-  // Proofs API
-  app.post('/api/v1/proofs', (req, res) => {
-    const { offerer_id, tenant_id, guaranteed_amount, valid_hours } = req.body;
-    const now = new Date();
-    const validUntil = new Date(now.getTime() + (valid_hours || 48) * 3600 * 1000);
-    const proof: CommitmentProof = {
-      offererId: offerer_id,
-      tenantId: tenant_id,
-      guaranteedAmount: guaranteed_amount,
-      validUntil,
-    };
-    proofsMap.set(`${offerer_id}:${tenant_id}`, proof);
-    res.json({
-      offerer_id: proof.offererId,
-      tenant_id: proof.tenantId,
-      guaranteed_amount: proof.guaranteedAmount,
-      valid_until: proof.validUntil.toISOString(),
-      is_active: true,
-    });
-  });
+  // Proofs API - Restricted to EXCHANGE_ADMIN
+  app.post(
+    '/api/v1/proofs',
+    requireAuth,
+    requireRole(['EXCHANGE_ADMIN']),
+    (req, res) => {
+      const { offerer_id, tenant_id, guaranteed_amount, valid_hours } = req.body;
+      const principal = req.principal!;
 
-  app.get('/api/v1/proofs/:offerer_id', (req, res) => {
-    const offererId = req.params.offerer_id;
-    const matched = Array.from(proofsMap.values()).filter((p) => p.offererId === offererId);
+      // Tenant isolation: Admin can only issue proofs within their own tenant
+      if (principal.tenantId !== tenant_id) {
+        auditSecurityAlert({
+          sub_type: 'TENANT_MISMATCH',
+          reason: `Admin tenant '${principal.tenantId}' cannot issue proof for tenant '${tenant_id}'`,
+          path: req.path,
+          method: req.method,
+          principal_id: principal.userId,
+          tenant_id: principal.tenantId,
+        });
+        res.status(403).json({
+          error: 'FORBIDDEN',
+          detail: `TENANT_MISMATCH: Administrator tenant '${principal.tenantId}' cannot issue proofs for tenant '${tenant_id}'`,
+        });
+        return;
+      }
+
+      const now = new Date();
+      const validUntil = new Date(now.getTime() + (valid_hours || 48) * 3600 * 1000);
+      const proof: CommitmentProof = {
+        offererId: offerer_id,
+        tenantId: tenant_id,
+        guaranteedAmount: guaranteed_amount,
+        validUntil,
+      };
+      proofsMap.set(`${offerer_id}:${tenant_id}`, proof);
+      res.json({
+        offerer_id: proof.offererId,
+        tenant_id: proof.tenantId,
+        guaranteed_amount: proof.guaranteedAmount,
+        valid_until: proof.validUntil.toISOString(),
+        is_active: true,
+      });
+    }
+  );
+
+  // Proofs Inspection - Scope-limited & Ownership enforced
+  app.get('/api/v1/proofs/:offerer_id', requireAuth, (req, res) => {
+    const requestedOffererId = req.params.offerer_id;
+    const principal = req.principal!;
+
+    const isAdminOrAuditor =
+      principal.roles.includes('EXCHANGE_ADMIN') || principal.roles.includes('AUDITOR');
+
+    // Ownership check: If not admin/auditor, user can ONLY read their own proof
+    if (!isAdminOrAuditor && principal.userId !== requestedOffererId) {
+      auditSecurityAlert({
+        sub_type: 'UNAUTHORIZED_PROOF_READ',
+        reason: `Principal '${principal.userId}' attempted to read proofs of '${requestedOffererId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: 'ACCESS_DENIED: Cannot view financial commitment proofs of other participants',
+      });
+      return;
+    }
+
+    // Tenant isolation: Only return proofs matching the principal's tenant
+    const matched = Array.from(proofsMap.values()).filter(
+      (p) => p.offererId === requestedOffererId && p.tenantId === principal.tenantId
+    );
     const now = new Date();
     res.json(
       matched.map((p) => ({
@@ -416,17 +641,70 @@ async function startServer() {
     );
   });
 
-  // Audit Events API
-  app.get('/api/v1/events', (_req, res) => {
-    res.json(auditEvents);
-  });
+  // Audit Events API - Restricted to AUDITOR or EXCHANGE_ADMIN, Tenant-Scoped
+  app.get(
+    '/api/v1/events',
+    requireAuth,
+    requireRole(['AUDITOR', 'EXCHANGE_ADMIN']),
+    (req, res) => {
+      const principal = req.principal!;
 
-  // Settle Competition (ADR-003)
-  app.post('/api/v1/competitions/:competition_id/settle', (req, res) => {
+      // Scope-limited read: Only return events relevant to the principal's tenant
+      const scopedEvents = auditEvents.filter((e) => {
+        if (!e.tenant_id) return true; // generic system events
+        return e.tenant_id === principal.tenantId;
+      });
+
+      res.json(scopedEvents);
+    }
+  );
+
+  // Settle Competition (ADR-003) - Restricted to EXCHANGE_ADMIN or verified SELLER of matching tenant
+  app.post('/api/v1/competitions/:competition_id/settle', requireAuth, (req, res) => {
     const compId = req.params.competition_id;
     const comp = competitionsMap.get(compId);
     if (!comp) {
       res.status(404).json({ detail: `Competition '${compId}' not found` });
+      return;
+    }
+
+    const principal = req.principal!;
+
+    // 1. Tenant Isolation: Principal tenant must match competition tenant
+    if (principal.tenantId !== comp.tenantId) {
+      auditSecurityAlert({
+        sub_type: 'TENANT_MISMATCH_SETTLE',
+        reason: `Principal tenant '${principal.tenantId}' cannot settle competition in tenant '${comp.tenantId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: `TENANT_MISMATCH: Principal tenant '${principal.tenantId}' cannot settle competition belonging to '${comp.tenantId}'`,
+      });
+      return;
+    }
+
+    // 2. Role & Ownership check: Must be EXCHANGE_ADMIN of that tenant, or the verified SELLER of that competition
+    const isTenantAdmin = principal.roles.includes('EXCHANGE_ADMIN');
+    const isCompetitionSeller =
+      principal.roles.includes('SELLER') && principal.userId === comp.sellerId;
+
+    if (!isTenantAdmin && !isCompetitionSeller) {
+      auditSecurityAlert({
+        sub_type: 'UNAUTHORIZED_SETTLEMENT_ATTEMPT',
+        reason: `Principal '${principal.userId}' is not authorized to settle competition '${compId}'`,
+        path: req.path,
+        method: req.method,
+        principal_id: principal.userId,
+        tenant_id: principal.tenantId,
+      });
+      res.status(403).json({
+        error: 'FORBIDDEN',
+        detail: `INSUFFICIENT_PERMISSIONS: Not authorized to settle competition '${compId}'. Must be exchange administrator or competition seller.`,
+      });
       return;
     }
 
@@ -516,6 +794,7 @@ async function startServer() {
       timestamp: now.toISOString(),
       event_type: 'ladder.determined',
       competition_id: compId,
+      tenant_id: comp.tenantId,
       winner_id: winnerId,
       clearing_price: clearingPrice,
       voucher_id: voucherId,

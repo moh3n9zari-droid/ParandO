@@ -32,4 +32,6 @@ jobs:
         run: npm run test:failure-cleanup
       - name: Timeout cleanup regression test
         run: npm run test:timeout-cleanup
+      - name: Security and RBAC regression tests (P0-02)
+        run: npm run test:security
 
