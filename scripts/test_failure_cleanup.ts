@@ -9,6 +9,7 @@ import {
   getAllTrackedProcesses,
   terminateProcessGroupGracefully,
   verifyPortCanBeBound,
+  emergencyCleanupProcessGroup,
 } from './process_tree.js';
 
 /**
@@ -130,30 +131,39 @@ export function runSmokeWithHarness(
 
         // 1. Terminate detached server process group
         if (serverPgid || serverPid) {
-          const srvRes = await terminateProcessGroupGracefully(serverPgid || serverPid!, serverPid || undefined, 4000);
+          const srvRes = await emergencyCleanupProcessGroup(serverPgid, serverPid, 'ServerProcessGroup', 4000);
           if (!srvRes.success) {
-            cleanupErrMsg = `Failed to terminate server process group ${serverPgid}: lingering PIDs ${srvRes.lingeringPids.join(', ')}`;
+            cleanupErrMsg = srvRes.error || `Failed to terminate server process group ${serverPgid}`;
           }
         }
 
         // 2. Terminate runner process group
-        const runnerRes = await terminateProcessGroupGracefully(runnerPgid, runnerPid, 3000);
+        const runnerRes = await emergencyCleanupProcessGroup(runnerPgid, runnerPid, 'RunnerProcessGroup', 3000);
         if (!runnerRes.success) {
           cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') +
-            `Failed to terminate runner process group ${runnerPgid}: lingering PIDs ${runnerRes.lingeringPids.join(', ')}`;
+            (runnerRes.error || `Failed to terminate runner process group ${runnerPgid}`);
         }
 
-        // 3. Verify port release
+        // 3. Verify port release and re-bindability
         if (port) {
           try {
             await waitForPortFree(port, 4000);
             await verifyPortCanBeBound(port);
           } catch (pErr: any) {
-            cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') + `Port ${port} was not freed: ${pErr.message}`;
+            cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') +
+              `[Cleanup Failure] Port ${port} recovery failed: ${pErr.message}`;
           }
         }
       } catch (err: any) {
-        cleanupErrMsg = err.message;
+        cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') + `[Cleanup Failure] Timeout cleanup exception: ${err.message}`;
+      }
+
+      // Allow bounded window for child process exitCode to populate
+      if (child.exitCode === null && child.signalCode === null) {
+        const exitWaitStart = Date.now();
+        while (Date.now() - exitWaitStart < 1500 && child.exitCode === null && child.signalCode === null) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
       }
 
       const durationMs = Date.now() - startTime;
@@ -183,7 +193,7 @@ export function runSmokeWithHarness(
       settled = true;
       if (timeoutTimer) clearTimeout(timeoutTimer);
       if (serverPgid || serverPid) {
-        await terminateProcessGroupGracefully(serverPgid || serverPid!, serverPid || undefined, 3000);
+        await emergencyCleanupProcessGroup(serverPgid, serverPid, 'DetachedServer', 3000);
       }
       resolve({
         code: null,
@@ -201,6 +211,7 @@ export function runSmokeWithHarness(
         cleanupError: err.message,
       });
     });
+
 
     child.on('exit', (code, signal) => {
       if (settled) return;

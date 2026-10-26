@@ -305,3 +305,59 @@ export async function waitForProcessGroupEmpty(
   return getAllTrackedProcesses(pgid, rootPid);
 }
 
+/**
+ * Emergency process group cleanup.
+ * Group-aware and descendant-aware: inspects all tracked processes in PGID and rootPid,
+ * even if the group leader process has already exited.
+ * Returns a structured report and verifies zero lingering processes.
+ */
+export async function emergencyCleanupProcessGroup(
+  pgid?: number | null,
+  rootPid?: number | null,
+  context = 'ProcessGroup',
+  timeoutMs = 3500
+): Promise<{ success: boolean; lingeringPids: number[]; error: string | null }> {
+  const targetPgid = pgid && pgid > 1 ? pgid : rootPid && rootPid > 1 ? rootPid : 0;
+  if (!targetPgid && (!rootPid || rootPid <= 1)) {
+    return { success: true, lingeringPids: [], error: null };
+  }
+
+  // 1. Identify all currently surviving processes in PGID or descendant tree
+  const activePids = getAllTrackedProcesses(targetPgid || undefined, rootPid || undefined);
+  if (activePids.length === 0) {
+    return { success: true, lingeringPids: [], error: null };
+  }
+
+  // 2. Perform graceful termination with escalation to SIGKILL
+  const termRes = await terminateProcessGroupGracefully(targetPgid, rootPid || undefined, timeoutMs);
+
+  // 3. Actively verify that process group and descendants are empty
+  const remaining = await waitForProcessGroupEmpty(targetPgid, rootPid || undefined, 1500);
+
+  if (remaining.length > 0) {
+    // Attempt final direct SIGKILL on any surviving PIDs
+    for (const pid of remaining) {
+      try {
+        process.kill(pid, 'SIGKILL');
+      } catch {}
+    }
+  }
+
+  const finalCheck = getAllTrackedProcesses(targetPgid || undefined, rootPid || undefined);
+  if (finalCheck.length > 0) {
+    const errorMsg = `[Cleanup Failure] ${context} (PGID: ${targetPgid}, PID: ${rootPid ?? 'n/a'}) failed to terminate: lingering PIDs ${finalCheck.join(', ')}`;
+    return {
+      success: false,
+      lingeringPids: finalCheck,
+      error: errorMsg,
+    };
+  }
+
+  return {
+    success: true,
+    lingeringPids: [],
+    error: null,
+  };
+}
+
+
