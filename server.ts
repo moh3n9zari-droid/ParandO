@@ -179,8 +179,8 @@ async function startServer() {
   app.use(cors());
   app.use(express.json());
 
-  // Health check API
-  app.get('/health', (_req, res) => {
+  // Health check API (/health and /api/v1/health)
+  app.get(['/health', '/api/v1/health'], (_req, res) => {
     res.json({
       status: 'healthy',
       service: 'parando-auction-ecosystem',
@@ -541,8 +541,6 @@ async function startServer() {
       wss.handleUpgrade(request, socket, head, (ws) => {
         wss.emit('connection', ws, request);
       });
-    } else {
-      socket.destroy();
     }
   });
 
@@ -634,7 +632,10 @@ async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server },
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
