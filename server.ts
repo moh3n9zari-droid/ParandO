@@ -640,12 +640,12 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     app.use(express.static('dist'));
-    app.get('*', (_req, res) => {
+    app.get('{/*splat}', (_req, res) => {
       res.sendFile('index.html', { root: 'dist' });
     });
   }
 
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`[ParandO] Server and WebSocket live on http://0.0.0.0:${PORT}`);
   });
