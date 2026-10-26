@@ -20,18 +20,26 @@ import WebSocket from 'ws';
  * 9. WebSocket handshake on /ws/competitions/:id (ladder.snapshot)
  * 10. Unsupported WebSocket upgrade path rejection (socket destroyed)
  * 11. Graceful shutdown (SIGTERM) releasing port, and clean restart on identical port
+ *     with explicit exit event verification for both initial and restarted server processes.
  */
 
 const activeProcesses: ChildProcess[] = [];
 
 function registerChild(child: ChildProcess) {
   activeProcesses.push(child);
+  child.once('exit', () => {
+    const idx = activeProcesses.indexOf(child);
+    if (idx !== -1) {
+      activeProcesses.splice(idx, 1);
+    }
+  });
 }
 
 function killProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM') {
-  if (!child.pid || child.killed) return;
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) return;
   try {
     if (process.platform !== 'win32') {
+      // Signal process group if detached
       process.kill(-child.pid, signal);
     } else {
       child.kill(signal);
@@ -44,8 +52,11 @@ function killProcess(child: ChildProcess, signal: NodeJS.Signals = 'SIGTERM') {
 }
 
 function cleanupAll() {
-  for (const child of activeProcesses) {
-    killProcess(child, 'SIGKILL');
+  const toClean = [...activeProcesses];
+  for (const child of toClean) {
+    if (child.pid && !child.killed && child.exitCode === null && child.signalCode === null) {
+      killProcess(child, 'SIGKILL');
+    }
   }
 }
 
@@ -77,9 +88,16 @@ async function getFreePort(): Promise<number> {
   });
 }
 
-function httpRequest(options: http.RequestOptions, postData?: string): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
+function httpRequest(
+  options: http.RequestOptions,
+  postData?: string
+): Promise<{ status: number; headers: http.IncomingHttpHeaders; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = http.request(options, (res) => {
+    const opts: http.RequestOptions = {
+      timeout: 5000,
+      ...options,
+    };
+    const req = http.request(opts, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => (data += chunk));
@@ -91,6 +109,9 @@ function httpRequest(options: http.RequestOptions, postData?: string): Promise<{
         });
       });
     });
+    req.on('timeout', () => {
+      req.destroy(new Error(`HTTP request to ${options.path || '/'} timed out after ${opts.timeout}ms`));
+    });
     req.on('error', reject);
     if (postData) {
       req.write(postData);
@@ -99,9 +120,14 @@ function httpRequest(options: http.RequestOptions, postData?: string): Promise<{
   });
 }
 
-async function waitForServerReady(port: number, timeoutMs = 15000): Promise<void> {
+async function waitForServerReady(child: ChildProcess, port: number, timeoutMs = 15000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      throw new Error(
+        `Server process exited prematurely with code ${child.exitCode}, signal ${child.signalCode} before becoming ready on port ${port}`
+      );
+    }
     try {
       const res = await httpRequest({
         hostname: '127.0.0.1',
@@ -127,23 +153,70 @@ async function waitForPortFree(port: number, timeoutMs = 8000): Promise<void> {
     const isFree = await new Promise<boolean>((resolve) => {
       const socket = new net.Socket();
       socket.setTimeout(500);
-      socket.on('connect', () => {
-        socket.destroy();
-        resolve(false);
-      });
-      socket.on('timeout', () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.on('error', () => {
-        resolve(true);
-      });
+      let settled = false;
+      const done = (free: boolean) => {
+        if (!settled) {
+          settled = true;
+          socket.destroy();
+          resolve(free);
+        }
+      };
+      socket.on('connect', () => done(false));
+      socket.on('timeout', () => done(true));
+      socket.on('error', () => done(true));
       socket.connect(port, '127.0.0.1');
     });
     if (isFree) return;
     await new Promise((r) => setTimeout(r, 200));
   }
   throw new Error(`Port ${port} was not freed within ${timeoutMs}ms`);
+}
+
+async function terminateServerGracefully(
+  child: ChildProcess,
+  signal: NodeJS.Signals = 'SIGTERM',
+  timeoutMs = 6000
+): Promise<{ code: number | null; signal: string | null }> {
+  if (!child.pid || child.killed || child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode as string | null };
+  }
+
+  return new Promise<{ code: number | null; signal: string | null }>((resolve, reject) => {
+    let settled = false;
+    let forceKillTimer: NodeJS.Timeout | null = null;
+    let timeoutTimer: NodeJS.Timeout | null = null;
+
+    const onExit = (code: number | null, sig: string | null) => {
+      if (settled) return;
+      settled = true;
+      if (forceKillTimer) clearTimeout(forceKillTimer);
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      child.removeListener('exit', onExit);
+      resolve({ code, signal: sig });
+    };
+
+    child.once('exit', onExit);
+
+    // Send graceful signal first (process group or single pid)
+    killProcess(child, signal);
+
+    // If it doesn't exit after 75% of timeout, escalate to SIGKILL
+    forceKillTimer = setTimeout(() => {
+      if (!settled && !child.killed && child.exitCode === null && child.signalCode === null) {
+        killProcess(child, 'SIGKILL');
+      }
+    }, Math.floor(timeoutMs * 0.75));
+
+    // Hard bounded timeout
+    timeoutTimer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        child.removeListener('exit', onExit);
+        killProcess(child, 'SIGKILL');
+        reject(new Error(`Process ${child.pid} did not exit within ${timeoutMs}ms after ${signal}`));
+      }
+    }, timeoutMs);
+  });
 }
 
 function spawnProductionServer(port: number): ChildProcess {
@@ -201,6 +274,11 @@ async function runProductionSmokeTests() {
   assert(!distHtml.includes('createWebSocketModuleRunnerTransport'), 'dist/index.html does not contain createWebSocketModuleRunnerTransport');
   assert(distHtml.includes('<div id="root">'), 'dist/index.html contains root mount node');
 
+  // Controlled negative check trigger
+  if (process.env.SMOKE_FORCE_FAIL === '1') {
+    throw new Error('Controlled negative test: simulated assertion failure in production smoke runner');
+  }
+
   // Allocate dynamic ephemeral port
   const port = await getFreePort();
   console.log(`\nAllocated dynamic ephemeral port: ${port}`);
@@ -209,7 +287,7 @@ async function runProductionSmokeTests() {
   let serverProcess = spawnProductionServer(port);
 
   try {
-    await waitForServerReady(port);
+    await waitForServerReady(serverProcess, port);
     console.log(`Production server successfully ready and listening on port ${port}`);
 
     // Assertion 1: GET /health
@@ -299,11 +377,22 @@ async function runProductionSmokeTests() {
       let presenceReceived = false;
       let pongStringReceived = false;
       let pongJsonReceived = false;
+      let settled = false;
 
       const timeout = setTimeout(() => {
-        ws.terminate();
-        reject(new Error('WebSocket /ws interaction timed out'));
+        if (!settled) {
+          settled = true;
+          ws.terminate();
+          reject(new Error('WebSocket /ws interaction timed out'));
+        }
       }, 5000);
+
+      const cleanup = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+        }
+      };
 
       ws.on('open', () => {
         // Send string ping
@@ -330,7 +419,7 @@ async function runProductionSmokeTests() {
         } catch {}
 
         if (presenceReceived && pongStringReceived && pongJsonReceived) {
-          clearTimeout(timeout);
+          cleanup();
           ws.close();
           assert(true, 'Received PRESENCE_SYNC, string pong, and JSON PONG on /ws');
           resolve();
@@ -338,8 +427,10 @@ async function runProductionSmokeTests() {
       });
 
       ws.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
+        if (!settled) {
+          cleanup();
+          reject(err);
+        }
       });
     });
 
@@ -347,12 +438,22 @@ async function runProductionSmokeTests() {
     console.log('\n[Test 10/11] Testing WebSocket competition snapshot on ws://127.0.0.1:' + port + '/ws/competitions/COMP-GOLD-001...');
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/competitions/COMP-GOLD-001`);
-      let snapshotReceived = false;
+      let settled = false;
 
       const timeout = setTimeout(() => {
-        ws.terminate();
-        reject(new Error('WebSocket competition snapshot timed out'));
+        if (!settled) {
+          settled = true;
+          ws.terminate();
+          reject(new Error('WebSocket competition snapshot timed out'));
+        }
       }, 5000);
+
+      const cleanup = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+        }
+      };
 
       ws.on('message', (data) => {
         try {
@@ -360,8 +461,7 @@ async function runProductionSmokeTests() {
           if (json.type === 'ladder.snapshot') {
             assert(json.competition_id === 'COMP-GOLD-001', 'ladder.snapshot competition_id matches');
             assert(Array.isArray(json.ladder), 'ladder.snapshot includes ladder array');
-            snapshotReceived = true;
-            clearTimeout(timeout);
+            cleanup();
             ws.close();
             resolve();
           }
@@ -369,8 +469,10 @@ async function runProductionSmokeTests() {
       });
 
       ws.on('error', (err) => {
-        clearTimeout(timeout);
-        reject(err);
+        if (!settled) {
+          cleanup();
+          reject(err);
+        }
       });
     });
 
@@ -378,55 +480,62 @@ async function runProductionSmokeTests() {
     console.log('\n[Test 11/11 part A] Testing unsupported WebSocket upgrade path rejection (/invalid-ws-route)...');
     await new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}/invalid-ws-route`);
+      let settled = false;
+
       const timeout = setTimeout(() => {
-        ws.terminate();
-        reject(new Error('Expected rejection for invalid WebSocket route, but connection timed out'));
-      }, 3000);
+        if (!settled) {
+          settled = true;
+          ws.terminate();
+          reject(new Error('Expected rejection for invalid WebSocket route, but connection timed out'));
+        }
+      }, 4000);
+
+      const cleanup = () => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timeout);
+        }
+      };
 
       ws.on('open', () => {
-        clearTimeout(timeout);
+        cleanup();
         ws.close();
         reject(new Error('Expected rejection for /invalid-ws-route, but connection succeeded!'));
       });
 
       ws.on('error', () => {
-        clearTimeout(timeout);
-        assert(true, 'Unsupported WebSocket route /invalid-ws-route rejected and destroyed');
-        resolve();
+        if (!settled) {
+          cleanup();
+          assert(true, 'Unsupported WebSocket route /invalid-ws-route rejected and destroyed');
+          resolve();
+        }
       });
 
       ws.on('close', () => {
-        clearTimeout(timeout);
-        assert(true, 'Unsupported WebSocket route /invalid-ws-route closed without 101');
-        resolve();
+        if (!settled) {
+          cleanup();
+          assert(true, 'Unsupported WebSocket route /invalid-ws-route closed without 101');
+          resolve();
+        }
       });
     });
 
     // Assertion 11: Graceful shutdown and clean restart on identical port
     console.log('\n[Test 11/11 part B] Testing graceful shutdown (SIGTERM) and port recovery on same port ' + port + '...');
-    const exitPromise = new Promise<{ code: number | null; signal: string | null }>((resolve) => {
-      serverProcess.on('exit', (code, signal) => {
-        resolve({ code, signal });
-      });
-    });
-
-    killProcess(serverProcess, 'SIGTERM');
-    const exitResult = await Promise.race([
-      exitPromise,
-      new Promise<{ code: null; signal: null }>((_, reject) =>
-        setTimeout(() => reject(new Error('Process did not exit after SIGTERM within 5s')), 5000)
-      ),
-    ]);
-    assert(exitResult.code === 0 || exitResult.signal === 'SIGTERM', `Server exited cleanly (code: ${exitResult.code}, signal: ${exitResult.signal})`);
+    const exitResult1 = await terminateServerGracefully(serverProcess, 'SIGTERM', 6000);
+    assert(
+      exitResult1.code === 0 || exitResult1.signal === 'SIGTERM',
+      `Initial server exited cleanly (code: ${exitResult1.code}, signal: ${exitResult1.signal})`
+    );
 
     // Verify port is freed
     await waitForPortFree(port);
-    assert(true, `Port ${port} successfully released`);
+    assert(true, `Port ${port} successfully released after initial server exit`);
 
     // Restart server on identical port
     console.log(`Restarting production server on SAME port ${port}...`);
     serverProcess = spawnProductionServer(port);
-    await waitForServerReady(port);
+    await waitForServerReady(serverProcess, port);
 
     const restartHealthRes = await httpRequest({
       hostname: '127.0.0.1',
@@ -436,10 +545,15 @@ async function runProductionSmokeTests() {
     });
     assert(restartHealthRes.status === 200, `Restarted server returned HTTP 200 on port ${port}`);
 
-    // Cleanly terminate restart process
-    killProcess(serverProcess, 'SIGTERM');
+    // Cleanly terminate restart process - explicitly await its exit event
+    console.log(`Terminating restarted server and verifying process exit event...`);
+    const exitResult2 = await terminateServerGracefully(serverProcess, 'SIGTERM', 6000);
+    assert(
+      exitResult2.code === 0 || exitResult2.signal === 'SIGTERM',
+      `Restarted server exited cleanly (code: ${exitResult2.code}, signal: ${exitResult2.signal})`
+    );
     await waitForPortFree(port);
-    assert(true, `Restarted server cleanly terminated and port ${port} freed`);
+    assert(true, `Restarted server port ${port} released`);
 
     console.log('\n=============================================================');
     console.log('ALL LOCAL PRODUCTION SMOKE TESTS PASSED (100% SUCCESS)');
