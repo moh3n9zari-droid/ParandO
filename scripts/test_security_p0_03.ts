@@ -1,4 +1,5 @@
 import http from 'http';
+import net from 'net';
 import crypto from 'crypto';
 import WebSocket from 'ws';
 import {
@@ -22,7 +23,7 @@ import { generateTestToken } from '../src/auth/test_token_helper';
  * AC-04: Nonexistent Competition & Invalid Paths Rejected on Upgrade (404).
  * AC-05: Cross-Tenant Access to Competition WebSocket Rejected on Upgrade (403 / No Snapshot).
  * AC-06: Authorized Connection to Competition Receives Authorized Snapshot & Scoped Presence.
- * AC-07: Subprotocol Authentication Support via Sec-WebSocket-Protocol (bearer.<token>).
+ * AC-07: Subprotocol Authentication Support via Sec-WebSocket-Protocol without Credential Reflection.
  * AC-08: Cross-Tenant Event Isolation (Offers & Settlement Deliver to Same-Tenant Watchers Only).
  * AC-09: Presence Information Strictly Partitioned per Tenant/Competition (Zero Cross-Tenant Leakage).
  * AC-10: Client Message Relay Isolated to Same Tenant & Same Competition.
@@ -37,6 +38,110 @@ interface WsConnectResult {
   error?: Error;
   messages: any[];
   ws?: WebSocket;
+  responseHeaders?: http.IncomingHttpHeaders;
+}
+
+export function assertNoCredentialLeak(
+  responseHeaders: http.IncomingHttpHeaders | undefined,
+  negotiatedProtocol: string | undefined,
+  token: string,
+  contextDesc = 'WebSocket Handshake'
+): void {
+  const protoHeader = responseHeaders?.['sec-websocket-protocol'];
+  if (typeof protoHeader === 'string') {
+    assert(
+      !protoHeader.includes(token),
+      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol echoes raw token!`
+    );
+    assert(
+      !protoHeader.toLowerCase().startsWith('bearer.'),
+      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol starts with 'bearer.' prefix!`
+    );
+    assert(
+      protoHeader.split('.').length !== 3,
+      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol resembles a JWT structure!`
+    );
+  }
+
+  if (negotiatedProtocol && negotiatedProtocol.length > 0) {
+    assert(
+      !negotiatedProtocol.includes(token),
+      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol property echoes raw token!`
+    );
+    assert(
+      !negotiatedProtocol.toLowerCase().startsWith('bearer.'),
+      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol property starts with 'bearer.' prefix!`
+    );
+    assert(
+      negotiatedProtocol.split('.').length !== 3,
+      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol resembles a JWT structure!`
+    );
+  }
+}
+
+interface RawUpgradeResult {
+  statusCode?: number;
+  statusText?: string;
+  headers: http.IncomingHttpHeaders;
+  socket?: net.Socket;
+}
+
+function performRawUpgradeRequest(
+  url: string,
+  options: {
+    headers?: Record<string, string>;
+    timeoutMs?: number;
+  }
+): Promise<RawUpgradeResult> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const key = crypto.randomBytes(16).toString('base64');
+    const reqHeaders: Record<string, string> = {
+      Connection: 'Upgrade',
+      Upgrade: 'websocket',
+      'Sec-WebSocket-Version': '13',
+      'Sec-WebSocket-Key': key,
+      ...options.headers,
+    };
+
+    const req = http.request({
+      hostname: parsed.hostname,
+      port: parsed.port,
+      path: parsed.pathname + parsed.search,
+      method: 'GET',
+      headers: reqHeaders,
+    });
+
+    const timer = setTimeout(() => {
+      req.destroy(new Error(`Raw upgrade request to ${url} timed out`));
+    }, options.timeoutMs ?? 4000);
+
+    req.on('upgrade', (res, socket) => {
+      clearTimeout(timer);
+      resolve({
+        statusCode: res.statusCode,
+        statusText: res.statusMessage,
+        headers: res.headers,
+        socket,
+      });
+    });
+
+    req.on('response', (res) => {
+      clearTimeout(timer);
+      resolve({
+        statusCode: res.statusCode,
+        statusText: res.statusMessage,
+        headers: res.headers,
+      });
+    });
+
+    req.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    req.end();
+  });
 }
 
 function connectWs(
@@ -51,9 +156,14 @@ function connectWs(
     const timeoutMs = options?.timeoutMs ?? 3000;
     const messages: any[] = [];
     let settled = false;
+    let responseHeaders: http.IncomingHttpHeaders | undefined = undefined;
 
     const ws = new WebSocket(url, options?.protocols, {
       headers: options?.headers,
+    });
+
+    ws.on('upgrade', (res) => {
+      responseHeaders = res.headers;
     });
 
     const timer = setTimeout(() => {
@@ -64,6 +174,7 @@ function connectWs(
           connected: false,
           error: new Error(`WebSocket connection to ${url} timed out after ${timeoutMs}ms`),
           messages,
+          responseHeaders,
         });
       }
     }, timeoutMs);
@@ -76,6 +187,7 @@ function connectWs(
           connected: true,
           messages,
           ws,
+          responseHeaders,
         });
       }
     });
@@ -98,6 +210,7 @@ function connectWs(
           statusCode: res.statusCode,
           error: new Error(`Unexpected HTTP response: ${res.statusCode}`),
           messages,
+          responseHeaders: res.headers,
         });
       }
     });
@@ -110,6 +223,7 @@ function connectWs(
           connected: false,
           error: err,
           messages,
+          responseHeaders,
         });
       }
     });
@@ -121,6 +235,7 @@ function connectWs(
         resolve({
           connected: false,
           messages,
+          responseHeaders,
         });
       }
     });
@@ -405,25 +520,157 @@ export async function runWebSocketSecurityTests(): Promise<void> {
     assert(snapshotMsg.competition_id === 'COMP-GOLD-001', 'Snapshot competition_id matches');
     assert(snapshotMsg.tenant_id === 'tenant-gold-bourse', 'Snapshot tenant_id matches');
     assert(Array.isArray(snapshotMsg.ladder), 'Snapshot contains ladder array');
+    assert(
+      authGoldConn.responseHeaders?.['sec-websocket-protocol'] === undefined,
+      'Authorization header connection does not return Sec-WebSocket-Protocol header'
+    );
+    assert(
+      !authGoldConn.ws?.protocol,
+      'Authorization header connection leaves ws.protocol empty'
+    );
+    assertNoCredentialLeak(
+      authGoldConn.responseHeaders,
+      authGoldConn.ws?.protocol,
+      goldTraderToken,
+      'Standard Authorization Header'
+    );
     console.log('✓ Test 5 passed: Authorized connection receives competition snapshot.\n');
 
     // -----------------------------------------------------------------------
-    // AC-07: Subprotocol Authentication via Sec-WebSocket-Protocol
+    // AC-07: Subprotocol Authentication via Sec-WebSocket-Protocol (Zero Credential Leakage)
     // -----------------------------------------------------------------------
-    console.log('[Test 6/12] Testing subprotocol authentication (Sec-WebSocket-Protocol: bearer.<token>)...');
-    const subprotoConn = await connectWs(`ws://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
-      protocols: `bearer.${goldTrader2Token}`,
+    console.log('[Test 6/12] Testing subprotocol authentication & zero credential reflection in handshake/protocol...');
+    
+    // Test 6a: Multi-subprotocol convention ['parando-v1', 'bearer.<token>']
+    const subprotoConn1 = await connectWs(`ws://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      protocols: ['parando-v1', `bearer.${goldTrader2Token}`],
     });
-    assert(subprotoConn.connected, 'Connection using Sec-WebSocket-Protocol subprotocol succeeded');
-    trackSocket(subprotoConn.ws);
+    const subprotoConn = subprotoConn1;
+    assert(subprotoConn1.connected, 'Connection using Sec-WebSocket-Protocol (parando-v1) succeeded');
+    trackSocket(subprotoConn1.ws);
+    assert(subprotoConn1.ws?.protocol === 'parando-v1', "ws.protocol negotiated as 'parando-v1'");
+    assert(
+      subprotoConn1.responseHeaders?.['sec-websocket-protocol'] === 'parando-v1',
+      "Response Sec-WebSocket-Protocol header is 'parando-v1'"
+    );
+    assertNoCredentialLeak(
+      subprotoConn1.responseHeaders,
+      subprotoConn1.ws?.protocol,
+      goldTrader2Token,
+      "Subprotocol ['parando-v1', 'bearer.<token>']"
+    );
 
-    const subprotoSnapshot = await waitForMessage(
-      subprotoConn.ws!,
-      subprotoConn.messages,
+    const subprotoSnapshot1 = await waitForMessage(
+      subprotoConn1.ws!,
+      subprotoConn1.messages,
       (m) => m && m.type === 'ladder.snapshot'
     );
-    assert(subprotoSnapshot.competition_id === 'COMP-GOLD-001', 'Subprotocol client received ladder.snapshot');
-    console.log('✓ Test 6 passed: Sec-WebSocket-Protocol subprotocol authentication functional.\n');
+    assert(subprotoSnapshot1.competition_id === 'COMP-GOLD-001', 'Subprotocol client received ladder.snapshot');
+
+    // Test 6b: Pair convention ['bearer', '<token>']
+    const subprotoConn2 = await connectWs(`ws://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      protocols: ['bearer', goldTrader2Token],
+    });
+    assert(subprotoConn2.connected, 'Connection using Sec-WebSocket-Protocol (bearer pair) succeeded');
+    trackSocket(subprotoConn2.ws);
+    assert(subprotoConn2.ws?.protocol === 'bearer', "ws.protocol negotiated as 'bearer'");
+    assert(
+      subprotoConn2.responseHeaders?.['sec-websocket-protocol'] === 'bearer',
+      "Response Sec-WebSocket-Protocol header is 'bearer'"
+    );
+    assertNoCredentialLeak(
+      subprotoConn2.responseHeaders,
+      subprotoConn2.ws?.protocol,
+      goldTrader2Token,
+      "Subprotocol ['bearer', '<token>']"
+    );
+
+    const subprotoSnapshot2 = await waitForMessage(
+      subprotoConn2.ws!,
+      subprotoConn2.messages,
+      (m) => m && m.type === 'ladder.snapshot'
+    );
+    assert(subprotoSnapshot2.competition_id === 'COMP-GOLD-001', 'Bearer pair client received ladder.snapshot');
+
+    // Test 6c: Alternative application subprotocol ['parando-auth', 'bearer.<token>']
+    const subprotoConn3 = await connectWs(`ws://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      protocols: ['parando-auth', `bearer.${goldTrader2Token}`],
+    });
+    assert(subprotoConn3.connected, 'Connection using Sec-WebSocket-Protocol (parando-auth) succeeded');
+    trackSocket(subprotoConn3.ws);
+    assert(subprotoConn3.ws?.protocol === 'parando-auth', "ws.protocol negotiated as 'parando-auth'");
+    assertNoCredentialLeak(
+      subprotoConn3.responseHeaders,
+      subprotoConn3.ws?.protocol,
+      goldTrader2Token,
+      "Subprotocol ['parando-auth', 'bearer.<token>']"
+    );
+
+    // Test 6d: Raw Handshake HTTP Header Inspections
+    console.log('  -> Inspecting raw HTTP upgrade handshake response headers for credential reflection...');
+    // Raw case 1: "parando-v1, bearer.<token>" -> returns HTTP 101, Sec-WebSocket-Protocol: parando-v1
+    const rawRes1 = await performRawUpgradeRequest(`http://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      headers: { 'Sec-WebSocket-Protocol': `parando-v1, bearer.${goldTrader2Token}` },
+    });
+    assert(rawRes1.statusCode === 101, 'Raw upgrade request with parando-v1 and bearer token returned 101');
+    assert(rawRes1.headers['sec-websocket-protocol'] === 'parando-v1', "Raw response protocol is 'parando-v1'");
+    assertNoCredentialLeak(rawRes1.headers, undefined, goldTrader2Token, 'Raw parando-v1 handshake');
+    rawRes1.socket?.destroy();
+
+    // Raw case 2: "bearer, <token>" -> returns HTTP 101, Sec-WebSocket-Protocol: bearer
+    const rawRes2 = await performRawUpgradeRequest(`http://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      headers: { 'Sec-WebSocket-Protocol': `bearer, ${goldTrader2Token}` },
+    });
+    assert(rawRes2.statusCode === 101, 'Raw upgrade request with bearer pair returned 101');
+    assert(rawRes2.headers['sec-websocket-protocol'] === 'bearer', "Raw response protocol is 'bearer'");
+    assertNoCredentialLeak(rawRes2.headers, undefined, goldTrader2Token, 'Raw bearer pair handshake');
+    rawRes2.socket?.destroy();
+
+    // Raw case 3: "bearer.<token>" alone (no safe application subprotocol)
+    // Server MUST NOT echo "bearer.<token>" in Sec-WebSocket-Protocol response header!
+    const rawRes3 = await performRawUpgradeRequest(`http://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      headers: { 'Sec-WebSocket-Protocol': `bearer.${goldTrader2Token}` },
+    });
+    assert(rawRes3.statusCode === 101, 'Raw upgrade request with isolated bearer.<token> returned 101');
+    assert(
+      rawRes3.headers['sec-websocket-protocol'] === undefined,
+      'Server MUST NOT negotiate or echo Sec-WebSocket-Protocol when only credential was supplied'
+    );
+    assertNoCredentialLeak(rawRes3.headers, undefined, goldTrader2Token, 'Raw isolated bearer.<token> handshake');
+    rawRes3.socket?.destroy();
+
+    // Raw case 4: Raw compact JWT alone in Sec-WebSocket-Protocol
+    const rawRes4 = await performRawUpgradeRequest(`http://127.0.0.1:${portB}/ws/competitions/COMP-GOLD-001`, {
+      headers: { 'Sec-WebSocket-Protocol': goldTrader2Token },
+    });
+    assert(rawRes4.statusCode === 101, 'Raw upgrade request with compact token returned 101');
+    assert(
+      rawRes4.headers['sec-websocket-protocol'] === undefined,
+      'Server MUST NOT negotiate or echo raw compact JWT in Sec-WebSocket-Protocol'
+    );
+    assertNoCredentialLeak(rawRes4.headers, undefined, goldTrader2Token, 'Raw compact JWT handshake');
+    rawRes4.socket?.destroy();
+
+    // Test 6e: Negative Test / Assertion Sensitivity Verification
+    // Prove that assertNoCredentialLeak would fail if the server ever echoed credentials (detects regressions)
+    let caughtSimulatedLeak = false;
+    try {
+      assertNoCredentialLeak(
+        { 'sec-websocket-protocol': `bearer.${goldTrader2Token}` },
+        `bearer.${goldTrader2Token}`,
+        goldTrader2Token,
+        'Simulated Vulnerable Server Response'
+      );
+    } catch (err: any) {
+      caughtSimulatedLeak = true;
+      assert(err.message.includes('SECURITY BLOCKER'), 'Assertion accurately catches credential reflection');
+    }
+    assert(
+      caughtSimulatedLeak,
+      'Negative test passed: regression suite strictly fails if credentials are leaked in handshake response or ws.protocol'
+    );
+
+    console.log('✓ Test 6 passed: Sec-WebSocket-Protocol subprotocol authentication verified with zero credential reflection.\n');
 
     // -----------------------------------------------------------------------
     // AC-08: Cross-Tenant Event Isolation (Offers & Settlement)

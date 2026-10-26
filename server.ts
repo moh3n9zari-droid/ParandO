@@ -837,10 +837,30 @@ async function startServer() {
     connectedAt: number;
   }
 
+  // Safe application subprotocols that can be negotiated without disclosing credentials
+  const SAFE_WS_SUBPROTOCOLS = new Set(['parando-v1', 'parando-auth', 'bearer']);
+
   const wss = new WebSocketServer({
     noServer: true,
-    handleProtocols: (_protocols, req) => {
-      return (req as any).selectedProtocol || false;
+    handleProtocols: (protocols, req) => {
+      const candidate = (req as any).selectedProtocol;
+      if (!candidate || typeof candidate !== 'string') {
+        return false;
+      }
+      const lower = candidate.toLowerCase();
+      // Zero-tolerance guard: NEVER echo a credential, JWT, or bearer.<token>
+      if (
+        lower.startsWith('bearer.') ||
+        candidate.split('.').length === 3 ||
+        candidate.length > 32 ||
+        !SAFE_WS_SUBPROTOCOLS.has(lower)
+      ) {
+        return false;
+      }
+      if (protocols.has(candidate)) {
+        return candidate;
+      }
+      return false;
     },
   });
   const connectedClients = new Map<WebSocket, ScopedClient>();
@@ -880,24 +900,38 @@ async function startServer() {
       }
     }
 
-    // 2. Sec-WebSocket-Protocol header: "bearer.<token>", "bearer, <token>", or compact token
+    // 2. Sec-WebSocket-Protocol header:
+    // Supports:
+    //   - "parando-v1, bearer.<token>" (negotiates 'parando-v1')
+    //   - "bearer, <token>" (negotiates 'bearer')
+    //   - "parando-auth, bearer.<token>" (negotiates 'parando-auth')
+    //   - "bearer.<token>" (extracts token, negotiates NOTHING to prevent credential disclosure)
     const protoHeader = request.headers['sec-websocket-protocol'];
     if (protoHeader && typeof protoHeader === 'string') {
       const subprotocols = protoHeader.split(',').map((p) => p.trim());
+
+      // Pass 1: Extract credential token
       for (const subproto of subprotocols) {
         if (subproto.toLowerCase().startsWith('bearer.')) {
           if (!token) token = subproto.slice(7);
-          selectedProtocol = subproto;
-          break;
-        }
-        if (subprotocols.length === 2 && subprotocols[0].toLowerCase() === 'bearer') {
-          if (!token) token = subprotocols[1];
-          selectedProtocol = subprotocols[0];
-          break;
-        }
-        if (subproto.split('.').length === 3) {
+        } else if (subproto.split('.').length === 3 && subproto.length > 20) {
           if (!token) token = subproto;
-          selectedProtocol = subproto;
+        }
+      }
+
+      // Handle pair convention: Sec-WebSocket-Protocol: "bearer, <token>"
+      if (!token && subprotocols.length === 2 && subprotocols[0].toLowerCase() === 'bearer') {
+        token = subprotocols[1];
+      }
+
+      // Pass 2: Select non-sensitive protocol ONLY
+      // CRITICAL SECURITY INVARIANT:
+      // The negotiated protocol MUST NEVER be or contain the token, start with "bearer.",
+      // or look like a JWT. Only whitelisted non-sensitive application protocol names are selected.
+      for (const subproto of subprotocols) {
+        const lower = subproto.toLowerCase();
+        if (SAFE_WS_SUBPROTOCOLS.has(lower) || SAFE_WS_SUBPROTOCOLS.has(subproto)) {
+          selectedProtocol = SAFE_WS_SUBPROTOCOLS.has(subproto) ? subproto : lower;
           break;
         }
       }
