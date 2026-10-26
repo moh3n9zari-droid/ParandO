@@ -309,7 +309,8 @@ export async function waitForProcessGroupEmpty(
  * Emergency process group cleanup.
  * Group-aware and descendant-aware: inspects all tracked processes in PGID and rootPid,
  * even if the group leader process has already exited.
- * Returns a structured report and verifies zero lingering processes.
+ * Evaluates graceful-cleanup outcome, escalates to final SIGKILL with bounded post-kill verification,
+ * and returns a structured report verified against OS state.
  */
 export async function emergencyCleanupProcessGroup(
   pgid?: number | null,
@@ -331,21 +332,41 @@ export async function emergencyCleanupProcessGroup(
   // 2. Perform graceful termination with escalation to SIGKILL
   const termRes = await terminateProcessGroupGracefully(targetPgid, rootPid || undefined, timeoutMs);
 
-  // 3. Actively verify that process group and descendants are empty
-  const remaining = await waitForProcessGroupEmpty(targetPgid, rootPid || undefined, 1500);
-
-  if (remaining.length > 0) {
-    // Attempt final direct SIGKILL on any surviving PIDs
-    for (const pid of remaining) {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {}
-    }
+  // 3. Explicitly evaluate the result of terminateProcessGroupGracefully
+  let gracefulFailureContext = '';
+  if (!termRes.success) {
+    gracefulFailureContext = `Graceful termination failed within ${timeoutMs}ms: lingering PIDs ${termRes.lingeringPids.join(', ')}`;
   }
 
+  // 4. Actively verify process group and descendants are empty
+  let remaining = await waitForProcessGroupEmpty(targetPgid, rootPid || undefined, 1500);
+
+  // 5. If processes still linger after graceful termination and initial verification,
+  // execute targeted final SIGKILL on each remaining PID and process group
+  if (remaining.length > 0 || !termRes.success) {
+    const pidsToKill = remaining.length > 0 ? remaining : termRes.lingeringPids;
+    if (process.platform !== 'win32' && targetPgid > 1) {
+      try {
+        process.kill(-targetPgid, 'SIGKILL');
+      } catch {}
+    }
+    for (const pid of pidsToKill) {
+      if (isPidAlive(pid)) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {}
+      }
+    }
+
+    // 6. CRITICAL: Bounded post-kill verification interval (polling OS state until empty or timeout)
+    remaining = await waitForProcessGroupEmpty(targetPgid, rootPid || undefined, 2000);
+  }
+
+  // 7. Final OS-level verification
   const finalCheck = getAllTrackedProcesses(targetPgid || undefined, rootPid || undefined);
   if (finalCheck.length > 0) {
-    const errorMsg = `[Cleanup Failure] ${context} (PGID: ${targetPgid}, PID: ${rootPid ?? 'n/a'}) failed to terminate: lingering PIDs ${finalCheck.join(', ')}`;
+    const failureDetails = gracefulFailureContext ? ` [${gracefulFailureContext}]` : '';
+    const errorMsg = `[Cleanup Failure] ${context} (PGID: ${targetPgid}, PID: ${rootPid ?? 'n/a'}) failed to terminate: lingering PIDs ${finalCheck.join(', ')}${failureDetails}`;
     return {
       success: false,
       lingeringPids: finalCheck,
@@ -359,5 +380,6 @@ export async function emergencyCleanupProcessGroup(
     error: null,
   };
 }
+
 
 

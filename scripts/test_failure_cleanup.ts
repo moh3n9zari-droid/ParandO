@@ -10,6 +10,8 @@ import {
   terminateProcessGroupGracefully,
   verifyPortCanBeBound,
   emergencyCleanupProcessGroup,
+  waitForPidDead,
+  waitForProcessGroupEmpty,
 } from './process_tree.js';
 
 /**
@@ -123,39 +125,59 @@ export function runSmokeWithHarness(
       if (settled) return;
       settled = true;
 
-      let cleanupErrMsg: string | null = null;
+      const cleanupFailures: string[] = [];
 
       try {
         console.log(`\n[HARNESS TIMEOUT] Reached timeout limit (${timeoutMs}ms). Initiating process cleanup...`);
         console.log(`[HARNESS TIMEOUT] Targets: Runner PID ${runnerPid} (PGID ${runnerPgid}), Server PID ${serverPid ?? 'unknown'} (PGID ${serverPgid ?? 'unknown'})`);
 
-        // 1. Terminate detached server process group
+        // 1. Terminate detached server process group independently
         if (serverPgid || serverPid) {
-          const srvRes = await emergencyCleanupProcessGroup(serverPgid, serverPid, 'ServerProcessGroup', 4000);
-          if (!srvRes.success) {
-            cleanupErrMsg = srvRes.error || `Failed to terminate server process group ${serverPgid}`;
+          try {
+            const srvRes = await emergencyCleanupProcessGroup(serverPgid, serverPid, 'ServerProcessGroup', 4000);
+            if (!srvRes.success) {
+              cleanupFailures.push(srvRes.error || `[Cleanup Failure] Failed to terminate server process group ${serverPgid}`);
+            }
+            const srvLingering = await waitForProcessGroupEmpty(serverPgid || serverPid!, serverPid || undefined, 2000);
+            if (srvLingering.length > 0) {
+              cleanupFailures.push(`[Cleanup Failure] Server process group ${serverPgid} has lingering PIDs: ${srvLingering.join(', ')}`);
+            }
+          } catch (srvErr: any) {
+            cleanupFailures.push(`[Cleanup Failure] Server cleanup exception: ${srvErr.message}`);
           }
         }
 
-        // 2. Terminate runner process group
-        const runnerRes = await emergencyCleanupProcessGroup(runnerPgid, runnerPid, 'RunnerProcessGroup', 3000);
-        if (!runnerRes.success) {
-          cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') +
-            (runnerRes.error || `Failed to terminate runner process group ${runnerPgid}`);
+        // 2. Terminate runner process group independently (attempted even if server cleanup failed)
+        try {
+          const runnerRes = await emergencyCleanupProcessGroup(runnerPgid, runnerPid, 'RunnerProcessGroup', 3000);
+          if (!runnerRes.success) {
+            cleanupFailures.push(runnerRes.error || `[Cleanup Failure] Failed to terminate runner process group ${runnerPgid}`);
+          }
+          // Verify runner process group and descendants are empty before returning
+          const runnerLingering = await waitForProcessGroupEmpty(runnerPgid, runnerPid, 2000);
+          if (runnerLingering.length > 0) {
+            cleanupFailures.push(`[Cleanup Failure] Runner process group ${runnerPgid} has lingering PIDs: ${runnerLingering.join(', ')}`);
+          }
+          // Verify runner PID itself is dead in OS
+          const runnerDead = await waitForPidDead(runnerPid, 2000);
+          if (!runnerDead || isPidAlive(runnerPid)) {
+            cleanupFailures.push(`[Cleanup Failure] Runner PID ${runnerPid} is still alive in OS`);
+          }
+        } catch (runnerErr: any) {
+          cleanupFailures.push(`[Cleanup Failure] Runner cleanup exception: ${runnerErr.message}`);
         }
 
-        // 3. Verify port release and re-bindability
+        // 3. Verify port release and re-bindability if port was allocated
         if (port) {
           try {
             await waitForPortFree(port, 4000);
             await verifyPortCanBeBound(port);
           } catch (pErr: any) {
-            cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') +
-              `[Cleanup Failure] Port ${port} recovery failed: ${pErr.message}`;
+            cleanupFailures.push(`[Cleanup Failure] Port ${port} recovery failed: ${pErr.message}`);
           }
         }
       } catch (err: any) {
-        cleanupErrMsg = (cleanupErrMsg ? cleanupErrMsg + '; ' : '') + `[Cleanup Failure] Timeout cleanup exception: ${err.message}`;
+        cleanupFailures.push(`[Cleanup Failure] Timeout cleanup exception: ${err.message}`);
       }
 
       // Allow bounded window for child process exitCode to populate
@@ -165,6 +187,21 @@ export function runSmokeWithHarness(
           await new Promise((r) => setTimeout(r, 50));
         }
       }
+
+      // Final OS verification: neither server nor runner should have surviving processes
+      const finalServerPids = (serverPgid || serverPid)
+        ? getAllTrackedProcesses(serverPgid || serverPid!, serverPid || undefined)
+        : [];
+      const finalRunnerPids = getAllTrackedProcesses(runnerPgid, runnerPid);
+
+      if (finalServerPids.length > 0) {
+        cleanupFailures.push(`[Cleanup Failure] Server group lingering PIDs detected in final verification: ${finalServerPids.join(', ')}`);
+      }
+      if (finalRunnerPids.length > 0) {
+        cleanupFailures.push(`[Cleanup Failure] Runner group lingering PIDs detected in final verification: ${finalRunnerPids.join(', ')}`);
+      }
+
+      const finalCleanupError = cleanupFailures.length > 0 ? cleanupFailures.join('; ') : null;
 
       const durationMs = Date.now() - startTime;
       resolve({
@@ -180,9 +217,10 @@ export function runSmokeWithHarness(
         serverPid,
         serverPgid,
         timedOut: true,
-        cleanupError: cleanupErrMsg,
+        cleanupError: finalCleanupError,
       });
     };
+
 
     timeoutTimer = setTimeout(() => {
       triggerTimeoutCleanup();

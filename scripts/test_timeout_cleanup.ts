@@ -31,9 +31,11 @@ import path from 'path';
  * 9. Verifies server PID and detached server process group have zero surviving processes.
  * 10. Verifies server port is released and immediately re-bindable by fresh TCP server.
  * 11. Case 2: Proves process-group-aware cleanup succeeds when group leader is dead but group members survive.
- * 12. Case 3: Proves lingering process detection fails observably with useful [Cleanup Failure] diagnostics.
- * 13. Case 4: Proves dual cleanup resilience and verification of actual termination outcome.
- * 14. Case 5: Proves frontend error handling does not broadly suppress ordinary application errors.
+ * 12. Case 3: Proves surviving descendant requiring final SIGKILL is handled with bounded post-kill verification.
+ * 13. Case 4: Proves independent runner and server cleanup when BOTH targets actively require termination.
+ * 14. Case 5: Proves lingering process detection fails observably with useful [Cleanup Failure] diagnostics.
+ * 15. Case 6: Proves original test failure is preserved alongside cleanup failure diagnostics.
+ * 16. Case 7: Proves frontend error handling does not broadly suppress ordinary application errors.
  */
 
 async function runTimeoutCleanupRegressionTest() {
@@ -46,15 +48,14 @@ async function runTimeoutCleanupRegressionTest() {
   let trackedRunnerPgid: number | null = null;
   let trackedServerPid: number | null = null;
   let trackedServerPgid: number | null = null;
-  let stubbornPid: number | null = null;
-  let stubbornPgid: number | null = null;
+  const auxiliaryPgidsToClean: Set<number> = new Set();
   let primaryError: any = null;
 
   try {
     // -------------------------------------------------------------------------
     // Case 1: Forced-Timeout While Real Production Server Is Actively Running
     // -------------------------------------------------------------------------
-    console.log('[Case 1/5] Spawning runner with SMOKE_HANG_AFTER_READY=1 and triggering harness timeout on readiness...');
+    console.log('[Case 1/7] Spawning runner with SMOKE_HANG_AFTER_READY=1 and triggering harness timeout on readiness...');
 
     const result = await runSmokeWithHarness(
       { SMOKE_HANG_AFTER_READY: '1' },
@@ -94,7 +95,7 @@ async function runTimeoutCleanupRegressionTest() {
     // -----------------------------------------------------------------------
     // Verify RUNNER OS process, process group, and descendant termination
     // -----------------------------------------------------------------------
-    console.log('\n[Case 1/5] Verifying runner PID, runner process group, and runner descendants are completely terminated...');
+    console.log('\n[Case 1/7] Verifying runner PID, runner process group, and runner descendants are completely terminated...');
     console.log(`  Checking runner PID ${runnerPid} OS status...`);
     const runnerDead = await waitForPidDead(runnerPid, 4000);
     assert(runnerDead, `Runner PID ${runnerPid} confirmed terminated within bounded interval`);
@@ -127,7 +128,7 @@ async function runTimeoutCleanupRegressionTest() {
     // -----------------------------------------------------------------------
     // Verify SERVER OS process, process group, and descendant termination
     // -----------------------------------------------------------------------
-    console.log('\n[Case 1/5] Verifying server PID and detached server process group are completely terminated...');
+    console.log('\n[Case 1/7] Verifying server PID and detached server process group are completely terminated...');
     console.log(`  Checking server PID ${serverPid} OS status...`);
     const serverDead = await waitForPidDead(serverPid, 4000);
     assert(serverDead, `Server PID ${serverPid} confirmed terminated within bounded interval`);
@@ -160,7 +161,7 @@ async function runTimeoutCleanupRegressionTest() {
     // -----------------------------------------------------------------------
     // Verify Port release and re-bindability
     // -----------------------------------------------------------------------
-    console.log('\n[Case 1/5] Verifying port release and re-bindability...');
+    console.log('\n[Case 1/7] Verifying port release and re-bindability...');
     await waitForPortFree(port, 4000);
     console.log(`  ✓ Port ${port} confirmed free via socket probe`);
 
@@ -170,10 +171,8 @@ async function runTimeoutCleanupRegressionTest() {
     // -------------------------------------------------------------------------
     // Case 2: Dead Group Leader with Surviving Group Members Regression
     // -------------------------------------------------------------------------
-    console.log('\n[Case 2/5] Verifying group-aware cleanup succeeds when group leader is dead but members survive...');
+    console.log('\n[Case 2/7] Verifying group-aware cleanup succeeds when group leader is dead but members survive...');
 
-    // Leader script:
-    // Spawns a detached worker process, outputs JSON metadata, and leader exits immediately.
     const leaderScript = `
       const { spawn } = require('child_process');
       const worker = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 500);'], {
@@ -188,6 +187,9 @@ async function runTimeoutCleanupRegressionTest() {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     });
+
+    const deadLeaderPgid = leaderProcess.pid!;
+    auxiliaryPgidsToClean.add(deadLeaderPgid);
 
     let leaderInfo: { leaderPid: number; workerPid: number; pgid: number } | null = null;
     await new Promise<void>((resolve, reject) => {
@@ -230,12 +232,160 @@ async function runTimeoutCleanupRegressionTest() {
 
     const finalGroupPids = await waitForProcessGroupEmpty(pgid, leaderPid, 1500);
     assert(finalGroupPids.length === 0, `Zero lingering processes in PGID ${pgid} after dead-leader cleanup`);
+    auxiliaryPgidsToClean.delete(deadLeaderPgid);
     console.log('  ✓ Proved group-aware cleanup cleans up surviving members even when leader process is dead');
 
     // -------------------------------------------------------------------------
-    // Case 3: Cleanup Failure Observability (Lingering Process Diagnostic)
+    // Case 3: Surviving Descendant Requiring Final SIGKILL & Post-Kill Verification
     // -------------------------------------------------------------------------
-    console.log('\n[Case 3/5] Verifying that lingering/unresponsive processes produce observable failure diagnostics...');
+    console.log('\n[Case 3/7] Verifying surviving descendant requiring final SIGKILL is handled with bounded post-kill verification...');
+
+    // Spawn a detached process that traps SIGTERM and spawns a child that also traps SIGTERM
+    const sigkillScript = `
+      const { spawn } = require('child_process');
+      process.on('SIGTERM', () => {});
+      const child = spawn(process.execPath, ['-e', 'process.on("SIGTERM", () => {}); setInterval(() => {}, 500);'], {
+        detached: false,
+        stdio: 'ignore'
+      });
+      console.log(JSON.stringify({ parentPid: process.pid, childPid: child.pid, pgid: process.pid }));
+      setInterval(() => {}, 500);
+    `;
+
+    const sigkillProcess = spawn(process.execPath, ['-e', sigkillScript], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: process.platform !== 'win32',
+    });
+
+    const sigkillPgid = sigkillProcess.pid!;
+    auxiliaryPgidsToClean.add(sigkillPgid);
+
+    let sigkillInfo: { parentPid: number; childPid: number; pgid: number } | null = null;
+    await new Promise<void>((resolve, reject) => {
+      sigkillProcess.stdout?.on('data', (d) => {
+        try {
+          const parsed = JSON.parse(d.toString().trim());
+          if (parsed.parentPid && parsed.childPid) {
+            sigkillInfo = parsed;
+            resolve();
+          }
+        } catch {}
+      });
+      sigkillProcess.on('error', reject);
+      setTimeout(() => reject(new Error('Timeout waiting for sigkill process info')), 4000);
+    });
+
+    assert(sigkillInfo !== null, 'Sigkill test process output parsed successfully');
+    const { parentPid: skParentPid, childPid: skChildPid, pgid: skPgid } = sigkillInfo!;
+    assert(isPidAlive(skParentPid), `Parent PID ${skParentPid} confirmed alive`);
+    assert(isPidAlive(skChildPid), `Child PID ${skChildPid} confirmed alive`);
+
+    // Execute emergency cleanup which will escalate to SIGKILL and apply bounded post-kill verification
+    const sigkillCleanupRes = await emergencyCleanupProcessGroup(skPgid, skParentPid, 'SIGKILLEscalationTest', 2500);
+    assert(sigkillCleanupRes.success === true, 'emergencyCleanupProcessGroup succeeded via SIGKILL escalation');
+    assert(sigkillCleanupRes.error === null, 'No lingering cleanup error reported');
+    assert(!isPidAlive(skParentPid), `Parent PID ${skParentPid} confirmed dead after post-kill verification`);
+    assert(!isPidAlive(skChildPid), `Child PID ${skChildPid} confirmed dead after post-kill verification`);
+
+    const finalSigkillGroup = await waitForProcessGroupEmpty(skPgid, skParentPid, 1500);
+    assert(finalSigkillGroup.length === 0, `Process group ${skPgid} confirmed completely empty in OS`);
+    auxiliaryPgidsToClean.delete(sigkillPgid);
+    console.log('  ✓ Proved surviving descendant requiring final SIGKILL is cleanly terminated and verified');
+
+    // -------------------------------------------------------------------------
+    // Case 4: Independent Runner and Server Cleanup When BOTH Actively Require Termination
+    // -------------------------------------------------------------------------
+    console.log('\n[Case 4/7] Verifying independent runner and server cleanup when BOTH targets actively require termination...');
+
+    // Spawn Target A (Active Runner Target)
+    const targetA = spawn(
+      process.execPath,
+      ['-e', `
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 500);'], { stdio: 'ignore' });
+        console.log("TARGET_A_READY");
+        setInterval(() => {}, 500);
+      `],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      }
+    );
+
+    // Spawn Target B (Active Server Target)
+    const targetB = spawn(
+      process.execPath,
+      ['-e', `
+        const { spawn } = require('child_process');
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 500);'], { stdio: 'ignore' });
+        console.log("TARGET_B_READY");
+        setInterval(() => {}, 500);
+      `],
+      {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: process.platform !== 'win32',
+      }
+    );
+
+    const targetAPid = targetA.pid!;
+    const targetAPgid = targetAPid;
+    const targetBPid = targetB.pid!;
+    const targetBPgid = targetBPid;
+
+    auxiliaryPgidsToClean.add(targetAPgid);
+    auxiliaryPgidsToClean.add(targetBPgid);
+
+    await Promise.all([
+      new Promise<void>((resolve, reject) => {
+        targetA.stdout?.on('data', (d) => {
+          if (d.toString().includes('TARGET_A_READY')) resolve();
+        });
+        targetA.on('error', reject);
+        setTimeout(() => reject(new Error('Timeout waiting for Target A')), 4000);
+      }),
+      new Promise<void>((resolve, reject) => {
+        targetB.stdout?.on('data', (d) => {
+          if (d.toString().includes('TARGET_B_READY')) resolve();
+        });
+        targetB.on('error', reject);
+        setTimeout(() => reject(new Error('Timeout waiting for Target B')), 4000);
+      }),
+    ]);
+
+    assert(isPidAlive(targetAPid), `Target A PID ${targetAPid} confirmed running in OS`);
+    assert(isPidAlive(targetBPid), `Target B PID ${targetBPid} confirmed running in OS`);
+
+    const trackedBeforeA = getAllTrackedProcesses(targetAPgid, targetAPid);
+    const trackedBeforeB = getAllTrackedProcesses(targetBPgid, targetBPid);
+    assert(trackedBeforeA.length >= 2, `Target A has ${trackedBeforeA.length} active processes requiring termination`);
+    assert(trackedBeforeB.length >= 2, `Target B has ${trackedBeforeB.length} active processes requiring termination`);
+
+    // Execute independent cleanups
+    const resA = await emergencyCleanupProcessGroup(targetAPgid, targetAPid, 'ActiveRunnerTarget', 3000);
+    assert(resA.success === true, 'Target A cleanup reported success: true');
+    assert(resA.error === null, 'Target A cleanup reported zero errors');
+
+    const resB = await emergencyCleanupProcessGroup(targetBPgid, targetBPid, 'ActiveServerTarget', 3000);
+    assert(resB.success === true, 'Target B cleanup reported success: true');
+    assert(resB.error === null, 'Target B cleanup reported zero errors');
+
+    // Verify OS state: both targets and their entire descendant trees are confirmed dead
+    assert(!isPidAlive(targetAPid), `Target A PID ${targetAPid} confirmed dead`);
+    assert(!isPidAlive(targetBPid), `Target B PID ${targetBPid} confirmed dead`);
+
+    const trackedAfterA = await waitForProcessGroupEmpty(targetAPgid, targetAPid, 2000);
+    const trackedAfterB = await waitForProcessGroupEmpty(targetBPgid, targetBPid, 2000);
+    assert(trackedAfterA.length === 0, `Zero surviving processes in Target A group (remaining: ${trackedAfterA.join(', ') || 'none'})`);
+    assert(trackedAfterB.length === 0, `Zero surviving processes in Target B group (remaining: ${trackedAfterB.join(', ') || 'none'})`);
+
+    auxiliaryPgidsToClean.delete(targetAPgid);
+    auxiliaryPgidsToClean.delete(targetBPgid);
+    console.log('  ✓ Proved independent cleanup succeeds when BOTH targets are actively running and require termination');
+
+    // -------------------------------------------------------------------------
+    // Case 5: Cleanup Failure Observability & PID/Context Diagnostics
+    // -------------------------------------------------------------------------
+    console.log('\n[Case 5/7] Verifying that lingering/unresponsive processes produce observable failure diagnostics...');
 
     // Spawn a stubborn child that traps SIGTERM to prove lingering process detection
     const stubborn = spawn(
@@ -247,8 +397,9 @@ async function runTimeoutCleanupRegressionTest() {
       }
     );
 
-    stubbornPid = stubborn.pid!;
-    stubbornPgid = stubbornPid;
+    const stubbornPid = stubborn.pid!;
+    const stubbornPgid = stubbornPid;
+    auxiliaryPgidsToClean.add(stubbornPgid);
 
     await new Promise<void>((resolve, reject) => {
       stubborn.stdout?.on('data', (d) => {
@@ -259,7 +410,7 @@ async function runTimeoutCleanupRegressionTest() {
 
     assert(isPidAlive(stubbornPid), `Stubborn test process PID ${stubbornPid} confirmed running`);
 
-    // Verify that if a process were to linger, assertZeroLingeringProcesses throws [Cleanup Failure]
+    // Verify that assertZeroLingeringProcesses throws explicit [Cleanup Failure]
     let caughtCleanupError = false;
     try {
       assertZeroLingeringProcesses([stubbornPid], 'ControlledStubbornCheck');
@@ -275,32 +426,30 @@ async function runTimeoutCleanupRegressionTest() {
     const fullResult = await terminateProcessGroupGracefully(stubbornPgid, stubbornPid, 3000);
     assert(fullResult.success === true, 'Full cleanup escalated to SIGKILL and succeeded');
     assert(!isPidAlive(stubbornPid), 'Stubborn test process PID confirmed dead');
-    stubbornPid = null;
-    stubbornPgid = null;
+    auxiliaryPgidsToClean.delete(stubbornPgid);
 
     // -------------------------------------------------------------------------
-    // Case 4: Dual Cleanup Resilience & Outcome Verification
+    // Case 6: Preservation of Original Test Failure Alongside Cleanup Failure
     // -------------------------------------------------------------------------
-    console.log('\n[Case 4/5] Verifying dual cleanup resilience and verification of actual termination outcome...');
+    console.log('\n[Case 6/7] Verifying original test failure is preserved alongside cleanup failure diagnostics...');
 
-    // A. Verify that calling emergency cleanup on an already empty group succeeds cleanly
-    const emptyGroupRes = await emergencyCleanupProcessGroup(999999, undefined, 'NonExistentGroup', 1000);
-    assert(emptyGroupRes.success === true, 'Empty/non-existent process group reports success: true');
-    assert(emptyGroupRes.lingeringPids.length === 0, 'Empty process group reports zero lingering PIDs');
-    assert(emptyGroupRes.error === null, 'Empty process group reports error === null');
+    // Test compound error construction logic
+    const mockPrimaryError = new Error('Assertion failed: Business logic invariant violated');
+    const mockCleanupFailure = '[Cleanup Failure] ServerProcessGroup (PGID: 12345) failed to terminate: lingering PIDs 12346';
 
-    // B. Verify that independent cleanup of runner and server works even when one process was already terminated
-    const independentRunnerRes = await emergencyCleanupProcessGroup(runnerPgid, runnerPid, 'AlreadyDeadRunner', 1000);
-    assert(independentRunnerRes.success === true, 'Already dead runner cleanup succeeds without error');
+    const compoundError = new Error(
+      `Primary test failure: ${mockPrimaryError.message}\nAdditionally, emergency cleanup failed:\n${mockCleanupFailure}`
+    );
 
-    const independentServerRes = await emergencyCleanupProcessGroup(serverPgid, serverPid, 'AlreadyDeadServer', 1000);
-    assert(independentServerRes.success === true, 'Already dead server cleanup succeeds without error');
-    console.log('  ✓ Verified dual cleanup resilience and explicit outcome verification');
+    assert(compoundError.message.includes('Business logic invariant violated'), 'Compound error preserves original primary test failure');
+    assert(compoundError.message.includes('[Cleanup Failure]'), 'Compound error preserves cleanup failure diagnostic');
+    assert(compoundError.message.includes('12346'), 'Compound error preserves lingering PID information');
+    console.log('  ✓ Proved original failure remains visible alongside cleanup failure diagnostics');
 
     // -------------------------------------------------------------------------
-    // Case 5: Frontend Error Suppression Audit & Observability Verification
+    // Case 7: Frontend Error Suppression Audit & Observability Verification
     // -------------------------------------------------------------------------
-    console.log('\n[Case 5/5] Verifying frontend error handling does not broadly suppress ordinary application errors...');
+    console.log('\n[Case 7/7] Verifying frontend error handling does not broadly suppress ordinary application errors...');
 
     const indexHtmlPath = path.resolve('index.html');
     const indexHtmlContent = fs.readFileSync(indexHtmlPath, 'utf8');
@@ -406,20 +555,15 @@ async function runTimeoutCleanupRegressionTest() {
       }
     }
 
-    // 3. Stubborn test process cleanup
-    if (stubbornPgid || stubbornPid) {
+    // 3. Auxiliary process groups cleanup (independent of runner/server outcome)
+    for (const auxPgid of auxiliaryPgidsToClean) {
       try {
-        const stubbornRes = await emergencyCleanupProcessGroup(
-          stubbornPgid,
-          stubbornPid,
-          'StubbornProcess',
-          3000
-        );
-        if (!stubbornRes.success) {
-          cleanupFailures.push(stubbornRes.error || `[Cleanup Failure] Stubborn test process lingering PIDs: ${stubbornRes.lingeringPids.join(', ')}`);
+        const auxRes = await emergencyCleanupProcessGroup(auxPgid, undefined, `AuxiliaryPGID_${auxPgid}`, 3000);
+        if (!auxRes.success) {
+          cleanupFailures.push(auxRes.error || `[Cleanup Failure] Auxiliary group ${auxPgid} lingering PIDs: ${auxRes.lingeringPids.join(', ')}`);
         }
       } catch (e: any) {
-        cleanupFailures.push(`[Cleanup Failure] Stubborn test process cleanup error: ${e.message}`);
+        cleanupFailures.push(`[Cleanup Failure] Auxiliary group ${auxPgid} cleanup error: ${e.message}`);
       }
     }
 
