@@ -1,0 +1,228 @@
+================================================================================
+PARANDO P0-01 EVIDENCE: FINAL SMOKE LIFECYCLE & ACCEPTANCE (CYCLE 11)
+================================================================================
+Timestamp: 2026-10-26T09:35:00Z
+Verification Target: GitHub Repository moh3n9zari-droid/ParandO (Branch: main)
+Observed Remote Baseline SHA: 52a881053c2ad8d8024cd9ad2535dc6c29174590
+Auditor / Verifier: Principal Software Architect & Lead Reliability Engineer
+Local Sandbox Environment: Linux Container, Node.js v22.23.3, npm 10.9.9, tsx v4.23.15
+Active Project Delivery Scope: LOCAL PRODUCTION-GRADE DELIVERY
+
+--------------------------------------------------------------------------------
+1. MISSION OVERVIEW & DEFECTS REMEDIATED IN SMOKE TEST SUITE
+--------------------------------------------------------------------------------
+Objective:
+Finalize P0-01 (Production Boot and Local Production-Grade Delivery) by correcting
+demonstrable reliability gaps in the existing production smoke test suite,
+verifying the complete process lifecycle (distinguishing signals sent from actual
+process exit, awaiting child process exit with bounded timeouts, ensuring cleanup
+of detached process groups, verifying restart process termination), running a
+controlled negative check, and executing the full local CI sequence.
+
+Defects Remediated in `scripts/production_smoke.ts`:
+1. Process Exit Event Verification:
+   - Previously, the initial server process awaited `exit`, but the restarted
+     server only called `killProcess` and `waitForPortFree` without explicitly
+     observing and asserting the child process's `exit` event.
+   - Implemented `terminateServerGracefully(child, signal, timeoutMs)`:
+     * Registers `child.once('exit')` before dispatching signals.
+     * Dispatches `SIGTERM` to the process group (`process.kill(-child.pid)` with
+       fallback to `child.kill`).
+     * Escalates to `SIGKILL` on the process group if process does not exit within
+       75% of bounded timeout (6000ms).
+     * Strictly verifies exit event and asserts `code === 0 || signal === 'SIGTERM'`.
+     * Both the initial server and the restarted server now undergo identical,
+       strict exit event assertions and port freedom confirmations.
+2. Process Group Signal Discipline:
+   - Enhanced `killProcess` and `cleanupAll` to use process group targeting
+     (`process.kill(-child.pid, ...)`) when detached, preventing orphaned child
+     processes or detached worker processes from leaking.
+3. Premature Startup Failure Detection:
+   - `waitForServerReady(child, port, timeoutMs)` now checks `child.exitCode`
+     and `child.signalCode` on each poll interval, instantly failing with an
+     informative error if the spawned child process dies prematurely rather than
+     hanging for the full 15s timeout.
+4. HTTP Request Socket Timeout Hardening:
+   - Added explicit `timeout: 5000` and `req.on('timeout', () => req.destroy(...))`
+     to `httpRequest` to prevent hanging sockets during probe failures.
+5. WebSocket Event Guarding:
+   - Added `settled` guards and explicit timeouts with `ws.terminate()` in tests
+     for `/ws`, `/ws/competitions/:id`, and `/invalid-ws-route` to guarantee no
+     lingering sockets or double assertions.
+6. Built-in Controlled Negative Check:
+   - Added `SMOKE_FORCE_FAIL=1` trigger in `scripts/production_smoke.ts` to allow
+     deterministic, repeatable validation that an assertion failure exits with code 1.
+
+--------------------------------------------------------------------------------
+2. CONTROLLED NEGATIVE CHECK VERIFICATION
+--------------------------------------------------------------------------------
+Command: SMOKE_FORCE_FAIL=1 npm run test:smoke || echo "FAILED_WITH_EXIT_CODE_$?"
+Exit Code: 1 (caught and verified by bash wrapper)
+Output:
+> parando-auction-ecosystem@1.0.0 test:smoke
+> tsx scripts/production_smoke.ts
+
+=============================================================
+ParandO Local Production Smoke Verification Suite
+Scope: LOCAL PRODUCTION-GRADE DELIVERY
+=============================================================
+
+[Test 1/11] Validating production index.html build sanitization...
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_START marker
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_END marker
+  ✓ dist/index.html does not contain ViteMockWebSocket
+  ✓ dist/index.html does not contain createWebSocketModuleRunnerTransport
+  ✓ dist/index.html contains root mount node
+
+SMOKE TEST SUITE FAILED: Error: Controlled negative test: simulated assertion failure in production smoke runner
+    at runProductionSmokeTests (/app/applet/scripts/production_smoke.ts:279:11)
+    at <anonymous> (/app/applet/scripts/production_smoke.ts:566:1)
+FAILED_WITH_EXIT_CODE_1
+
+Conclusion:
+Controlled negative check PASSED. A failing assertion in `scripts/production_smoke.ts`
+reliably triggers `cleanupAll()` and terminates the test runner with exit code 1.
+
+--------------------------------------------------------------------------------
+3. FULL LOCAL CI SEQUENCE EXECUTION (NODE.JS 22)
+--------------------------------------------------------------------------------
+
+[Step 1: npm ci]
+Command: npm ci
+Exit Code: 0
+Output:
+added 428 packages, and audited 429 packages in 11s
+124 packages are looking for funding
+  run `npm fund` for details
+found 0 vulnerabilities
+
+[Step 2: npm run lint]
+Command: npm run lint (tsc --noEmit)
+Exit Code: 0
+Output:
+(clean exit, 0 errors)
+
+[Step 3: npm test]
+Command: npm test
+Exit Code: 0
+Output:
+> parando-auction-ecosystem@1.0.0 test
+> tsx -e "import { runAllCoreTests } from './src/core/tests_suite'; const res = runAllCoreTests(); const failed = res.filter(r => r.status === 'failed'); console.log('Passed ' + (res.length - failed.length) + '/' + res.length + ' tests'); if (failed.length > 0) { failed.forEach(f => console.error('FAILED:', f.name, f.error)); process.exit(1); }"
+
+Passed 26/26 tests
+
+[Step 4: npm run build]
+Command: npm run build (tsc && vite build)
+Exit Code: 0
+Output:
+vite v6.4.5 building for production...
+transforming...
+✓ 1971 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/registerSW.js                0.13 kB
+dist/manifest.webmanifest         0.63 kB
+dist/index.html                   2.06 kB │ gzip:   0.88 kB
+dist/assets/index-Be2pvyEv.css   86.85 kB │ gzip:  13.10 kB
+dist/assets/index-vt2dlFCB.js   762.64 kB │ gzip: 191.79 kB
+✓ built in 4.68s
+PWA v2.0.0
+mode      generateSW
+precache  15 entries (848.88 KiB)
+files generated  dist/sw.js  dist/workbox-afac4cd2.js
+
+[Step 5: npm run test:smoke]
+Command: npm run test:smoke
+Exit Code: 0
+Output:
+> parando-auction-ecosystem@1.0.0 test:smoke
+> tsx scripts/production_smoke.ts
+
+=============================================================
+ParandO Local Production Smoke Verification Suite
+Scope: LOCAL PRODUCTION-GRADE DELIVERY
+=============================================================
+
+[Test 1/11] Validating production index.html build sanitization...
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_START marker
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_END marker
+  ✓ dist/index.html does not contain ViteMockWebSocket
+  ✓ dist/index.html does not contain createWebSocketModuleRunnerTransport
+  ✓ dist/index.html contains root mount node
+
+Allocated dynamic ephemeral port: 44573
+
+[Test 2/11] Spawning production server on port 44573...
+Production server successfully ready and listening on port 44573
+
+[Test 3/11] Testing GET /health...
+  ✓ GET /health returned HTTP 200
+  ✓ GET /health Content-Type is application/json
+  ✓ GET /health body status is "healthy"
+  ✓ GET /health service name matches
+  ✓ GET /health lists ADR standards
+
+[Test 4/11] Testing GET /api/v1/health...
+  ✓ GET /api/v1/health returned HTTP 200
+  ✓ GET /api/v1/health body status is "healthy"
+  ✓ GET /api/v1/health service matches
+
+[Test 5/11] Testing GET / (root static HTML delivery)...
+  ✓ GET / returned HTTP 200
+  ✓ GET / Content-Type is text/html
+  ✓ GET / body is valid HTML
+  ✓ GET / contains SPA root container
+
+[Test 6/11] Testing GET /competitions/COMP-GOLD-001 (SPA fallback)...
+  ✓ GET /competitions/COMP-GOLD-001 returned HTTP 200
+  ✓ SPA fallback Content-Type is text/html
+  ✓ SPA fallback serves index.html with root container
+
+[Test 7/11] Testing GET /api/v1/competitions (API routing)...
+  ✓ GET /api/v1/competitions returned HTTP 200
+  ✓ Competitions API returned array
+  ✓ Competitions API returned at least one active auction
+  ✓ Gold auction (COMP-GOLD-001) is present
+
+[Test 8/11] Testing GET /api/v1/nonexistent (404 JSON for unknown API routes)...
+  ✓ GET /api/v1/nonexistent returned HTTP 404
+  ✓ 404 Content-Type is application/json (not SPA HTML)
+  ✓ 404 JSON detail matches expected message
+
+[Test 9/11] Testing WebSocket connection on ws://127.0.0.1:44573/ws...
+  ✓ PRESENCE_SYNC contains activeWatchers count
+  ✓ Received PRESENCE_SYNC, string pong, and JSON PONG on /ws
+
+[Test 10/11] Testing WebSocket competition snapshot on ws://127.0.0.1:44573/ws/competitions/COMP-GOLD-001...
+  ✓ ladder.snapshot competition_id matches
+  ✓ ladder.snapshot includes ladder array
+
+[Test 11/11 part A] Testing unsupported WebSocket upgrade path rejection (/invalid-ws-route)...
+  ✓ Unsupported WebSocket route /invalid-ws-route rejected and destroyed
+
+[Test 11/11 part B] Testing graceful shutdown (SIGTERM) and port recovery on same port 44573...
+  ✓ Initial server exited cleanly (code: 0, signal: null)
+  ✓ Port 44573 successfully released after initial server exit
+Restarting production server on SAME port 44573...
+  ✓ Restarted server returned HTTP 200 on port 44573
+Terminating restarted server and verifying process exit event...
+  ✓ Restarted server exited cleanly (code: 0, signal: null)
+  ✓ Restarted server port 44573 released
+
+=============================================================
+ALL LOCAL PRODUCTION SMOKE TESTS PASSED (100% SUCCESS)
+=============================================================
+
+--------------------------------------------------------------------------------
+4. REMOTE CI STATUS FOR OBSERVED HEAD (52a881053c2ad8d8024cd9ad2535dc6c29174590)
+--------------------------------------------------------------------------------
+- Remote Status: UNVERIFIED / BLOCKED pending repository owner push.
+- Explanation: The container environment has no Git credentials, `.git` metadata
+  directory is omitted from the sandbox filesystem, and direct `git push` is
+  strictly prohibited by system instructions.
+- Previous passing CI runs:
+  * Commit `e32e621d7933...`: Run ID 40288752621 (PASSED)
+  * Commit `2dd7c83b6609...`: Run ID 40266766870 (PASSED)
+- Local CI Pipeline Equivalence: 100% PASS across `npm ci`, `npm run lint`,
+  `npm test`, `npm run build`, and `npm run test:smoke`.
+================================================================================

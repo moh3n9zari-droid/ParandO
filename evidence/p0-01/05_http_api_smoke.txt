@@ -1,0 +1,136 @@
+================================================================================
+PARANDO P0-01 VERIFICATION EVIDENCE: HTTP & API SMOKE TESTS (AC-05, AC-06)
+================================================================================
+Timestamp: 2026-10-26T04:05:54Z - 04:06:02Z
+Target Server: http://127.0.0.1:3006 (Production Mode, serving /dist)
+
+--------------------------------------------------------------------------------
+REQUEST 1: HEALTH ENDPOINT (AC-05)
+--------------------------------------------------------------------------------
+Command:
+$ curl -i -s http://127.0.0.1:3006/health
+
+Response:
+HTTP/1.1 200 OK
+X-Powered-By: Express
+Access-Control-Allow-Origin: *
+Content-Type: application/json; charset=utf-8
+Content-Length: 218
+ETag: W/"da-SxbbGVJjJxQsOPaEtZoNMwiXreY"
+Date: Mon, 26 Oct 2026 04:05:54 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+{
+  "status": "healthy",
+  "service": "parando-auction-ecosystem",
+  "standards": ["ADR-001", "ADR-002", "ADR-003", "ADR-004"],
+  "kernel_conformance": ["ADR-001", "ADR-002", "TR-01", "TR-12", "TR-13"],
+  "timestamp": "2026-10-26T04:05:54.676Z"
+}
+
+Result: PASS (200 OK, conformant payload matching ADR standards)
+
+--------------------------------------------------------------------------------
+REQUEST 2: APPLICATION ENTRY POINT (AC-06)
+--------------------------------------------------------------------------------
+Command:
+$ curl -i -s http://127.0.0.1:3006/
+
+Response:
+HTTP/1.1 200 OK
+X-Powered-By: Express
+Access-Control-Allow-Origin: *
+Accept-Ranges: bytes
+Cache-Control: public, max-age=0
+Last-Modified: Mon, 26 Oct 2026 04:05:42 GMT
+ETag: W/"80c-1a17662b409"
+Content-Type: text/html; charset=utf-8
+Content-Length: 2060
+Date: Mon, 26 Oct 2026 04:05:57 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+<!doctype html><html lang="fa" dir="rtl">  <head>    <meta charset="UTF-8" />    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />    <title>Parando National Auction Ecosystem (حراج ملی پرندو)</title> ... <script type="module" crossorigin src="/assets/index-vt2dlFCB.js"></script> ... </body></html>
+
+Result: PASS (200 OK, serves production dist/index.html with RTL and Parando metadata)
+
+--------------------------------------------------------------------------------
+REQUEST 3: NESTED SPA ROUTE FALLBACK (AC-06)
+--------------------------------------------------------------------------------
+Command:
+$ curl -i -s http://127.0.0.1:3006/auctions/COMP-GOLD-001
+
+Response:
+HTTP/1.1 200 OK
+X-Powered-By: Express
+Access-Control-Allow-Origin: *
+Accept-Ranges: bytes
+Cache-Control: public, max-age=0
+Last-Modified: Mon, 26 Oct 2026 04:05:42 GMT
+ETag: W/"80c-1a17662b409"
+Content-Type: text/html; charset=utf-8
+Content-Length: 2060
+Date: Mon, 26 Oct 2026 04:06:00 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+[Serves dist/index.html without 404 or redirect, confirming Express 5 {/*splat} SPA fallback]
+
+Result: PASS (200 OK, fallback functions accurately for client routing)
+
+--------------------------------------------------------------------------------
+REQUEST 4: COMPETITIONS API (AC-06)
+--------------------------------------------------------------------------------
+Command:
+$ curl -i -s http://127.0.0.1:3006/api/v1/competitions
+
+Response:
+HTTP/1.1 200 OK
+X-Powered-By: Express
+Access-Control-Allow-Origin: *
+Content-Type: application/json; charset=utf-8
+Content-Length: 2809
+ETag: W/"af9-t9kLMQecuZ1fkwcRJ/6EyNn3328"
+Date: Mon, 26 Oct 2026 04:06:02 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+[
+  {
+    "competition_id": "COMP-GOLD-001",
+    "tenant_id": "tenant-gold-bourse",
+    "seller_id": "central-bullion-vault",
+    "status": "ACTIVE",
+    "version": 0,
+    "starts_at": "2026-10-26T03:50:50.049Z",
+    "ends_at": "2026-10-26T07:05:50.049Z",
+    "ladder_size": 5,
+    "rules": {
+      "base_price": 42500000000,
+      "min_increment": 250000000,
+      "deposit_rate_bps": 1500,
+      "required_exposure": 6375000000
+    },
+    "highest_offer": null,
+    "offer_count": 0,
+    "ladder": []
+  },
+  {
+    "competition_id": "COMP-PETRO-001",
+    "tenant_id": "tenant-energy-bourse",
+    "seller_id": "persian-petrochem-corp",
+    "status": "ACTIVE",
+    "version": 0,
+    "rules": { "base_price": 85000000000, "min_increment": 500000000, "deposit_rate_bps": 1500, "required_exposure": 12750000000 },
+    "ladder_size": 4
+  },
+  { "competition_id": "COMP-PETROCHEMICALS-001", "status": "ACTIVE" },
+  { "competition_id": "COMP-AUTOMOTIVE-001", "status": "ACTIVE" },
+  { "competition_id": "COMP-GOODS-001", "status": "ACTIVE" },
+  { "competition_id": "COMP-REAL_ESTATE-001", "status": "ACTIVE" },
+  { "competition_id": "COMP-AGRICULTURE-001", "status": "ACTIVE" }
+]
+
+Result: PASS (200 OK, 7 active institutional competitions returned with full domain rules)
+================================================================================

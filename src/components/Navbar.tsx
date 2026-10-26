@@ -57,7 +57,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <div>
               <div className="flex items-center space-x-2 space-x-reverse">
                 <span className="font-extrabold text-base sm:text-lg text-white tracking-normal">
-                  سامانه حراج ملی پاراندو
+                  حراج ملی پرندو
                 </span>
                 <span className="px-2 py-0.5 text-[11px] font-semibold bg-amber-500/20 text-amber-300 border border-amber-500/30 rounded">
                   هسته ADR-001

@@ -1,0 +1,190 @@
+================================================================================
+PARANDO P0-01 EVIDENCE: PRODUCTION SMOKE & ACCEPTANCE VERIFICATION (CYCLE 10)
+================================================================================
+Timestamp: 2026-10-26T09:20:00Z
+Verification Target: GitHub Repository moh3n9zari-droid/ParandO (Branch: main)
+Observed Remote HEAD: cba9580d2fd5dbe244ca90cb5eedb7a1d834af08
+Auditor / Verifier: Principal Software Architect & Lead Reliability Engineer
+Local Sandbox Environment: Linux Container, Node.js v22.23.3, npm 10.9.9, tsx v4.23.15
+Active Project Delivery Scope: LOCAL PRODUCTION-GRADE DELIVERY
+
+--------------------------------------------------------------------------------
+1. MISSION OVERVIEW & IMPLEMENTED DELIVERABLES
+--------------------------------------------------------------------------------
+Objective:
+Complete all evidence-backed acceptance work for P0-01 (Production Boot and Local Production-Grade Delivery)
+on the current source tree, establishing a repository-native automated smoke verification suite that
+detects regressions locally and in CI.
+
+Deliverables Implemented:
+1. Automated Production Smoke Test Suite (`scripts/production_smoke.ts`):
+   - Dynamically selects collision-safe ephemeral port using net.createServer().listen(0).
+   - Spawns production server under NODE_ENV=production.
+   - Verifies production HTML sanitization (dist/index.html contains neither dev HMR mock nor marker strings).
+   - Verifies HTTP 200 JSON on both /health and /api/v1/health with ADR standards metadata.
+   - Verifies HTTP 200 text/html on root static route (/).
+   - Verifies HTTP 200 text/html on client SPA deep route (/competitions/COMP-GOLD-001).
+   - Verifies HTTP 200 application/json on active API route (/api/v1/competitions).
+   - Verifies HTTP 404 application/json on unknown API route (/api/v1/nonexistent) without SPA fallback leak.
+   - Verifies WebSocket handshake on /ws with PRESENCE_SYNC, string ping/pong, and JSON PING/PONG.
+   - Verifies WebSocket handshake on /ws/competitions/:id with ladder.snapshot payload.
+   - Verifies unsupported WebSocket upgrade routes (e.g. /invalid-ws-route) are rejected and destroyed.
+   - Verifies graceful shutdown via SIGTERM, port release confirmation, clean restart on identical port, and shutdown.
+   - Implements try...finally process registry guaranteeing zero leaked zombie processes.
+2. Package Script Registration (`package.json`):
+   - Added script: "test:smoke": "tsx scripts/production_smoke.ts"
+3. GitHub Actions CI Enhancement (`.github/workflows/ci.yml`):
+   - Added step: "Production smoke tests" executing `npm run test:smoke` immediately after `npm run build`.
+
+--------------------------------------------------------------------------------
+2. LOCAL EXECUTION SUITE VERIFICATION (EXACT COMMANDS & OUTPUTS)
+--------------------------------------------------------------------------------
+
+[Command 1: npm run lint]
+Command Line: tsc --noEmit
+Exit Code: 0
+Output: (clean exit, 0 errors)
+
+[Command 2: npm test]
+Command Line: tsx -e "import { runAllCoreTests } from './src/core/tests_suite'; const res = runAllCoreTests(); const failed = res.filter(r => r.status === 'failed'); console.log('Passed ' + (res.length - failed.length) + '/' + res.length + ' tests'); if (failed.length > 0) { failed.forEach(f => console.error('FAILED:', f.name, f.error)); process.exit(1); }"
+Exit Code: 0
+Output:
+Passed 26/26 tests
+
+[Command 3: npm run build]
+Command Line: tsc && vite build
+Exit Code: 0
+Output:
+vite v6.4.5 building for production...
+transforming...
+✓ 1971 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/registerSW.js                0.13 kB
+dist/manifest.webmanifest         0.63 kB
+dist/index.html                   2.06 kB │ gzip:   0.88 kB
+dist/assets/index-Be2pvyEv.css   86.85 kB │ gzip:  13.10 kB
+dist/assets/index-vt2dlFCB.js   762.64 kB │ gzip: 191.79 kB
+✓ built in 5.15s
+PWA v2.0.0
+mode      generateSW
+precache  15 entries (848.88 KiB)
+files generated  dist/sw.js  dist/workbox-afac4cd2.js
+
+[Command 4: npm run test:smoke]
+Command Line: tsx scripts/production_smoke.ts
+Exit Code: 0
+Output:
+=============================================================
+ParandO Local Production Smoke Verification Suite
+Scope: LOCAL PRODUCTION-GRADE DELIVERY
+=============================================================
+
+[Test 1/11] Validating production index.html build sanitization...
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_START marker
+  ✓ dist/index.html does not contain DEV_ONLY_SCRIPT_END marker
+  ✓ dist/index.html does not contain ViteMockWebSocket
+  ✓ dist/index.html does not contain createWebSocketModuleRunnerTransport
+  ✓ dist/index.html contains root mount node
+
+Allocated dynamic ephemeral port: 44756
+
+[Test 2/11] Spawning production server on port 44756...
+Production server successfully ready and listening on port 44756
+
+[Test 3/11] Testing GET /health...
+  ✓ GET /health returned HTTP 200
+  ✓ GET /health Content-Type is application/json
+  ✓ GET /health body status is "healthy"
+  ✓ GET /health service name matches
+  ✓ GET /health lists ADR standards
+
+[Test 4/11] Testing GET /api/v1/health...
+  ✓ GET /api/v1/health returned HTTP 200
+  ✓ GET /api/v1/health body status is "healthy"
+  ✓ GET /api/v1/health service matches
+
+[Test 5/11] Testing GET / (root static HTML delivery)...
+  ✓ GET / returned HTTP 200
+  ✓ GET / Content-Type is text/html
+  ✓ GET / body is valid HTML
+  ✓ GET / contains SPA root container
+
+[Test 6/11] Testing GET /competitions/COMP-GOLD-001 (SPA fallback)...
+  ✓ GET /competitions/COMP-GOLD-001 returned HTTP 200
+  ✓ SPA fallback Content-Type is text/html
+  ✓ SPA fallback serves index.html with root container
+
+[Test 7/11] Testing GET /api/v1/competitions (API routing)...
+  ✓ GET /api/v1/competitions returned HTTP 200
+  ✓ Competitions API returned array
+  ✓ Competitions API returned at least one active auction
+  ✓ Gold auction (COMP-GOLD-001) is present
+
+[Test 8/11] Testing GET /api/v1/nonexistent (404 JSON for unknown API routes)...
+  ✓ GET /api/v1/nonexistent returned HTTP 404
+  ✓ 404 Content-Type is application/json (not SPA HTML)
+  ✓ 404 JSON detail matches expected message
+
+[Test 9/11] Testing WebSocket connection on ws://127.0.0.1:44756/ws...
+  ✓ PRESENCE_SYNC contains activeWatchers count
+  ✓ Received PRESENCE_SYNC, string pong, and JSON PONG on /ws
+
+[Test 10/11] Testing WebSocket competition snapshot on ws://127.0.0.1:44756/ws/competitions/COMP-GOLD-001...
+  ✓ ladder.snapshot competition_id matches
+  ✓ ladder.snapshot includes ladder array
+
+[Test 11/11 part A] Testing unsupported WebSocket upgrade path rejection (/invalid-ws-route)...
+  ✓ Unsupported WebSocket route /invalid-ws-route rejected and destroyed
+  ✓ Unsupported WebSocket route /invalid-ws-route closed without 101
+
+[Test 11/11 part B] Testing graceful shutdown (SIGTERM) and port recovery on same port 44756...
+  ✓ Server exited cleanly (code: 0, signal: null)
+  ✓ Port 44756 successfully released
+Restarting production server on SAME port 44756...
+  ✓ Restarted server returned HTTP 200 on port 44756
+  ✓ Restarted server cleanly terminated and port 44756 freed
+
+=============================================================
+ALL LOCAL PRODUCTION SMOKE TESTS PASSED (100% SUCCESS)
+=============================================================
+
+--------------------------------------------------------------------------------
+3. FULL ACCEPTANCE MATRIX (AC-01 THROUGH AC-14)
+--------------------------------------------------------------------------------
+
+| Criterion ID | Designation | Status | Direct Verification Evidence |
+| :--- | :--- | :---: | :--- |
+| AC-01 | Baseline Integrity | PASS | Node v22.23.3, npm 10.9.9. Observed remote HEAD cba9580d2fd5dbe244ca90cb5eedb7a1d834af08 reconciled. |
+| AC-02 | Reproducible Installation | PASS | `npm ci` completed cleanly (429 packages audited, 0 vulnerabilities). Deterministic package-lock.json intact. |
+| AC-03 | Static Typecheck & Unit Tests | PASS | `npm run lint` (`tsc --noEmit`) exited 0. `npm test` passed 26/26 core rules tests (ADR-001 through ADR-004). |
+| AC-04 | Local Production Startup | PASS | `NODE_ENV=production PORT=<dynamic> npm start` boots successfully without ERR_UNKNOWN_FILE_EXTENSION. |
+| AC-05 | Shared Health Endpoints | PASS | `GET /health` and `GET /api/v1/health` return HTTP 200 JSON with service and ADR conformance standards. |
+| AC-06 | Root Static HTML Delivery | PASS | `GET /` serves production HTML (starts with <!doctype html>, contains root container). |
+| AC-07 | Client SPA Deep Route Fallback | PASS | `GET /competitions/COMP-GOLD-001` returns HTTP 200 text/html via Express 5 `{/*splat}` SPA fallback. |
+| AC-08 | Existing API Route Correctness | PASS | `GET /api/v1/competitions` returns HTTP 200 JSON containing seeded institutional auctions. |
+| AC-09 | Unknown API Route 404 Disambiguation | PASS | `GET /api/v1/nonexistent` returns HTTP 404 application/json (`{"detail":"API endpoint not found"}`), never SPA HTML. |
+| AC-10 | Production HTML Sanitization | PASS | `dist/index.html` verified free of DEV_ONLY_SCRIPT markers, ViteMockWebSocket, and dev error interceptors. |
+| AC-11 | Real Application WebSocket Protocol | PASS | WebSocket on `/ws` exchanges PRESENCE_SYNC, string ping/pong, JSON PING/PONG. `/ws/competitions/:id` delivers ladder.snapshot. |
+| AC-12 | Unsupported WebSocket Path Rejection | PASS | Upgrade requests to unsupported routes (e.g. `/invalid-ws-route`) are cleanly rejected via socket.destroy(). |
+| AC-13 | Graceful Shutdown & Port Rebind | PASS | Server intercepts SIGTERM, closes clients, unlinks port; verified port release and successful restart on same port. |
+| AC-14 | Automated Smoke Gate & Scope Discipline | PASS (Local) / BLOCKED (Remote CI) | Smoke test added to `package.json` (`test:smoke`) and `.github/workflows/ci.yml`. Local execution 100% PASS. Remote CI run unverified because direct git push is prohibited. Scope strictly bounded to P0-01; P0-02 untouched. |
+
+--------------------------------------------------------------------------------
+4. REMOTE CI STATUS STATEMENT
+--------------------------------------------------------------------------------
+- As established in prior audit cycles, the local workspace is a sandboxed execution container without direct git remote write credentials.
+- Pushing to `origin/main` is strictly prohibited by agent safety instructions.
+- Therefore, the newly added smoke test step in `.github/workflows/ci.yml` is verified locally with 100% pass rate, but the corresponding remote GitHub Actions run is recorded as BLOCKED / UNVERIFIED until pushed and executed by the repository owner.
+- No fabricated GitHub Actions run IDs or synthetic conclusions are asserted.
+
+--------------------------------------------------------------------------------
+5. SCOPE COMPLETION CONCLUSION
+--------------------------------------------------------------------------------
+Within the active project delivery scope — LOCAL PRODUCTION-GRADE DELIVERY — all acceptance criteria
+for remediation item P0-01 are fully satisfied with reproducible, automated local execution evidence.
+
+Remediation item P0-01 is concluded. The next sequenced remediation item is P0-02 (Authentication,
+Authorization & Role-Based Access Control / RBAC) from RELEASE_READINESS_REMEDIATION_PLAN.md.
+P0-02 remains unstarted in accordance with the strict single-item remediation boundary.
+================================================================================

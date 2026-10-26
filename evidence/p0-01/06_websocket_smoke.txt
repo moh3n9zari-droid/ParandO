@@ -1,0 +1,39 @@
+================================================================================
+PARANDO P0-01 VERIFICATION EVIDENCE: WEBSOCKET SMOKE TEST (AC-07)
+================================================================================
+Timestamp: 2026-10-26T04:06:07Z
+Test Harness: Node.js WebSocket client ('ws' package)
+Target Ports: ws://127.0.0.1:3006/ws and ws://127.0.0.1:3006/ws/competitions/:id
+
+COMMAND:
+$ node -e "
+const WebSocket = require('ws');
+...
+"
+
+OBSERVED TRANSCRIPT:
+1. Endpoint: ws://127.0.0.1:3006/ws
+   - Connection status: OPEN (Upgrade 101 Switching Protocols succeeded)
+   - Initial Server Message:
+     {"type":"PRESENCE_SYNC","payload":{"activeWatchers":1},"timestamp":1792987568234}
+   - Sent Frame: {"type":"PING"}
+   - Received Server Message:
+     {"type":"PONG","timestamp":1792987568238}
+   - Close: Succeeded (code 1000)
+
+2. Endpoint: ws://127.0.0.1:3006/ws/competitions/COMP-GOLD-001
+   - Connection status: OPEN
+   - Initial Server Message:
+     {"type":"PRESENCE_SYNC","payload":{"activeWatchers":2},"timestamp":1792987568242}
+   - Competition Snapshot Frame:
+     {"type":"ladder.snapshot","competition_id":"COMP-GOLD-001","version":0,"status":"ACTIVE","highest_offer":null,"ladder":[],"ends_at":"2026-10-26T07:05:50.049Z","server_time":"2026-10-26T04:06:08.242Z"}
+   - Sent Frame: {"type":"PING"}
+   - Received Server Message:
+     {"type":"PONG","timestamp":1792987568244}
+   - Close: Succeeded (code 1000)
+
+EXPLICIT SECURITY & AUDIT BOUNDARY STATEMENT:
+- This smoke test establishes that HTTP connection upgrade, WebSocket framing, presence synchronization, and competition snapshot streaming operate correctly in the production Node process.
+- CRITICAL: Successful WebSocket connectivity DOES NOT prove authentication, user authorization, tenant isolation, or anti-sniping security.
+- Pre-existing audit findings regarding WebSocket message broadcasting, cross-tenant isolation (P0-03), and unauthenticated access remain independent open remediation items and are NOT resolved by P0-01.
+================================================================================
