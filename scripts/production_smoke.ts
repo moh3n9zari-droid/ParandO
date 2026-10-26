@@ -372,6 +372,7 @@ export function spawnProductionServer(port: number): ChildProcess {
   });
 
   registerChild(child);
+  console.log(`[SERVER_SPAWNED] Port: ${port}, PID: ${child.pid}, PGID: ${child.pid}`);
 
   child.stdout?.on('data', (d) => {
     const text = d.toString();
@@ -423,13 +424,21 @@ export async function runProductionSmokeTests() {
 
   try {
     await waitForServerReady(serverProcess, port);
-    console.log(`Production server successfully ready and listening on port ${port} (PID: ${serverProcess.pid})`);
+    console.log(`Production server successfully ready and listening on port ${port} (PID: ${serverProcess.pid}, PGID: ${serverProcess.pid})`);
 
     // Controlled negative check trigger: only executes AFTER the server is verified ready
     if (process.env.SMOKE_FORCE_FAIL === '1' || process.env.SMOKE_FAIL_AFTER_READY === '1') {
-      console.log(`\n[CONTROLLED FAILURE TRIGGER] Server verified healthy and ready on port ${port} (PID: ${serverProcess.pid}).`);
+      console.log(`\n[CONTROLLED FAILURE TRIGGER] Server verified healthy and ready on port ${port} (PID: ${serverProcess.pid}, PGID: ${serverProcess.pid}).`);
       console.log('[CONTROLLED FAILURE TRIGGER] Triggering deliberate post-readiness assertion failure to verify cleanup...');
       assert(false, 'Controlled post-readiness failure: simulated test failure while production server is actively running');
+    }
+
+    // Controlled hang trigger: forces runner hang after server readiness to test harness timeout cleanup
+    if (process.env.SMOKE_HANG_AFTER_READY === '1') {
+      console.log(`\n[CONTROLLED HANG TRIGGER] Server verified healthy and ready on port ${port} (PID: ${serverProcess.pid}, PGID: ${serverProcess.pid}).`);
+      console.log('[CONTROLLED HANG TRIGGER] Simulating runner hang after server readiness to trigger harness timeout...');
+      // Indefinitely keep process alive until terminated by harness timeout handler
+      await new Promise(() => {});
     }
 
     // Assertion 1: GET /health

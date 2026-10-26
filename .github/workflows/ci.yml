@@ -30,4 +30,6 @@ jobs:
         run: npm run test:escalation
       - name: Failure cleanup integration test
         run: npm run test:failure-cleanup
+      - name: Timeout cleanup regression test
+        run: npm run test:timeout-cleanup
 

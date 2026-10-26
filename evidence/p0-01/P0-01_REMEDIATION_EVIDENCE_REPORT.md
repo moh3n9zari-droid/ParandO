@@ -7,7 +7,7 @@
 - **Original Audit Baseline Commit:** `30767ab22e40d6a39cfa60c3ee41d0d85c0cf3c8`
 - **Auditor / Verifier:** Principal Systems & Reliability Architect
 - **Verification Environment:** Linux Container (Node.js `v22.23.3`, npm `10.9.9`, tsx `v4.23.15`, Vite `6.2.0`)
-- **Report Update Date / Timestamp:** 2026-10-26T11:32:00Z (Cycle 13 Deterministic Post-Readiness Failure Cleanup Verification)
+- **Report Update Date / Timestamp:** 2026-10-26T11:46:00Z (Cycle 14 Process Tree, Process Group & Timeout Cleanup Acceptance)
 - **Active Project Delivery Scope:** LOCAL PRODUCTION-GRADE DELIVERY
 - **Authoritative Frameworks:** `PROJECT_OWNER_INTENT.md`, `CURRENT_STATE_AUDIT.md`, `RELEASE_READINESS_REMEDIATION_PLAN.md`, `QUALITY_RUBRIC.md`, `AGENTS.md`
 
@@ -25,19 +25,25 @@
    - Corrected `terminateServerGracefully`: sends initial graceful signal (SIGTERM) to the process group, activates an escalation timer after 50% of the bounded window, dispatches forced `SIGKILL` if the process remains alive, and observes the kernel `exit` event.
    - Handled already-terminated processes immediately without hanging or false success.
    - Implemented `cleanupAllAsync(timeoutMs)` with observable error throwing if processes fail to terminate.
-2. **Deterministic Post-Readiness Failure Cleanup (PASS):**
-   - Repositioned negative check trigger in `scripts/production_smoke.ts` so it can strictly only execute AFTER the production server has spawned, started, and responded HTTP 200 on `/health`.
-   - Added dedicated integration test harness (`scripts/test_failure_cleanup.ts` / `npm run test:failure-cleanup`).
-   - Verified that when an assertion failure occurs on a running production server:
-     a) Smoke runner exits with code 1 within bounded time.
-     b) Production server OS process is completely dead (`process.kill(pid, 0)` -> `ESRCH` and `/proc/${pid}` removed).
-     c) No descendant or process-group child remains.
-     d) Listening port is freed and immediately re-bindable by fresh TCP server.
-     e) Original assertion error is preserved in log output and cleanup failure is observable.
-3. **Quality Gates Passed (PASS):** Clean `npm ci` (0 vulnerabilities across 429 audited packages), clean `npm run lint` (`tsc --noEmit`, 0 errors), 100% pass on core domain tests (`npm test`, 26/26 tests passing), clean production build (`npm run build`), 100% pass on production smoke tests (`npm run test:smoke`), 100% pass on escalation test (`npm run test:escalation`), and 100% pass on failure cleanup test (`npm run test:failure-cleanup`).
-4. **CI Pipeline Integration (PASS locally / Remote BLOCKED):** Updated `.github/workflows/ci.yml` with `Production smoke tests`, `Process escalation regression test`, and `Failure cleanup integration test`. Remote CI execution remains documented as BLOCKED / UNVERIFIED pending push by the repository owner due to sandbox container restrictions.
-5. **Delivery Objective Boundary:** The project owner has explicitly defined the active delivery scope as **LOCAL PRODUCTION-GRADE DELIVERY**, excluding public hosting, cloud orchestrator deployment, public DNS, public TLS certificates, and public WSS endpoints from the current delivery objective. Within this delivery scope, all required technical criteria are fully satisfied.
-6. **Boundary Rule:** No claims of "release-ready" or "10/10" are made. Independent audit items P0-02 (Auth/RBAC), P0-03 (WebSocket isolation), and P0-04 (financial settlement integrity) remain open and unaffected.
+2. **Recursive Descendants & Process-Group Verification (PASS):**
+   - Implemented `getProcStatInfo(pid)` parsing `/proc/[pid]/stat` to extract parent PID and process group ID (PGRP).
+   - Implemented `getLinuxProcessGroupPids(pgid)` to enumerate all processes in a given PGID.
+   - Implemented `getRecursiveDescendants(rootPid)` using BFS over the parent-to-children tree to detect grandchildren and deeper descendants.
+   - Verified that after server termination, zero surviving processes exist in the server's detached process group or descendant tree.
+3. **Deterministic Timeout-Path Cleanup (PASS):**
+   - Streamed runner stdout to capture runner PID, server PID, and server PGID as soon as emitted.
+   - If the harness reaches its timeout, it terminates BOTH the runner process group (`-runnerPid`) AND the independently detached production server group (`-serverPgid`).
+   - Verified port recovery and re-bindability via a fresh TCP server socket.
+   - Implemented `assertZeroLingeringProcesses(pids, context)` throwing observable `[Cleanup Failure]` if any process lingers.
+4. **Dedicated Regression Test Suites (PASS):**
+   - Post-readiness failure cleanup: `scripts/test_failure_cleanup.ts` (`npm run test:failure-cleanup`).
+   - Timeout cleanup regression: `scripts/test_timeout_cleanup.ts` (`npm run test:timeout-cleanup`).
+   - Both deliberate failure scenarios are strictly isolated from normal smoke execution.
+5. **Quality Gates Passed (PASS):** Clean `npm ci` (0 vulnerabilities across 428 audited packages), clean `npm run lint` (`tsc --noEmit`, 0 errors), 100% pass on core domain tests (`npm test`, 26/26 tests passing), clean production build (`npm run build`), 100% pass on production smoke tests (`npm run test:smoke`), 100% pass on escalation test (`npm run test:escalation`), 100% pass on failure cleanup test (`npm run test:failure-cleanup`), and 100% pass on timeout cleanup test (`npm run test:timeout-cleanup`).
+6. **Reversion of Unrelated Changes (PASS):** Reverted unrelated `onunhandledrejection` interceptors from `index.html`.
+7. **CI Pipeline Integration (PASS locally / Remote BLOCKED):** Updated `.github/workflows/ci.yml` with all 7 validation steps. Remote CI execution remains documented as BLOCKED / UNVERIFIED pending push by repository owner.
+8. **Delivery Objective Boundary:** The project owner has explicitly defined the active delivery scope as **LOCAL PRODUCTION-GRADE DELIVERY**, excluding public hosting, cloud orchestrator deployment, public DNS, public TLS certificates, and public WSS endpoints from the current delivery objective. Within this delivery scope, all required technical criteria are fully satisfied.
+9. **Boundary Rule:** No claims of "release-ready" or "10/10" are made. Independent audit items P0-02 (Auth/RBAC), P0-03 (WebSocket isolation), and P0-04 (financial settlement integrity) remain open and unaffected.
 
 ---
 
@@ -49,8 +55,8 @@
 | **Source Remediation Under Test** | `2dd7c83b6609a9fc5a1f3b1518e5effd1f92d0b5` | Contains application source modifications: Express 5 `{/*splat}`, configurable `PORT`, `start` script, `tsx` in dependencies, and `package-lock.json`. Passed CI (Run ID: `40266766870`). |
 | **Intermediate Documentation Cycles** | `40dbbf38` to `63af3217` | Evidence cycles 1 through 7 documenting local verification and previous HEAD states. |
 | **Server & CI Enhancements** | `365247d9`, `76cc5ebe`, `e32e621d` | Server configuration improvements, asset serving, routing, and CI pipeline steps. Passed CI on `e32e621d` (Run ID: `40288752621`). |
-| **Observed Remote Commits** | `cba9580d...`, `52a88105...`, `0d3c205362b7...`, `33c43954...` | Incorporates dev-only Vite HMR mock bounded by HTML markers, build-time strip plugin, shared health handler, Express 5 404 handler, and SIGTERM/SIGINT shutdown handler. |
-| **Cycle 13 Deliverables** | Working Tree | Moved negative trigger to post-readiness in `scripts/production_smoke.ts`, made cleanup failures observable in `cleanupAllAsync`, created `scripts/test_failure_cleanup.ts`, added `"test:failure-cleanup"`, and updated `.github/workflows/ci.yml`. |
+| **Observed Remote Commits** | `cba9580d...`, `52a88105...`, `0d3c205362b7...`, `33c43954...`, `c7ee7088...` | Incorporates dev-only Vite HMR mock, shared health handler, Express 5 404 handler, and SIGTERM/SIGINT shutdown handler. Passed CI on `c7ee7088` (Run ID: `40315841944`). |
+| **Cycle 14 Deliverables** | Working Tree | Reverted unrelated `onunhandledrejection` interceptors in `index.html`, added `scripts/process_tree.ts` (recursive descendants and PGID inspection), added dual-group timeout cleanup in `scripts/test_failure_cleanup.ts`, added `scripts/test_timeout_cleanup.ts`, added `"test:timeout-cleanup"` in `package.json`, and added CI workflow step. |
 
 ---
 
@@ -78,11 +84,12 @@
 | **AC-03** | Observed Exit Event After Escalation | **PASS** | `scripts/test_termination_escalation.ts`, `18_cycle12_process_escalation_and_acceptance.txt`. Exit event observed with `signal: 'SIGKILL'` and `escalated: true`. | Process exit was not deterministically awaited after escalation. | Resolved: Explicit promise settlement on kernel `exit` event with bounded timeout. |
 | **AC-04** | Deterministic Handling of Edge States | **PASS** | `scripts/test_termination_escalation.ts` (Test 2). Already-dead process returns immediately without hanging or duplicate handler firing. | Potential timer leaks and race conditions on signal failures. | Resolved: Clean listener removal, timer cancellation, and ESRCH handling. |
 | **AC-05** | Production Server Termination & Port Release | **PASS** | `scripts/production_smoke.ts` (Test 11 parts B & C). Initial and restarted servers both exit cleanly (`code === 0`) and release ephemeral port. | Restarted server lacked explicit child process exit event observation. | Resolved: Both instances verified via `terminateServerGracefully` and `waitForPortFree`. |
-| **AC-06** | Negative Test Nonzero Exit & Post-Readiness Cleanup | **PASS** | `scripts/test_failure_cleanup.ts`, `19_cycle13_failure_cleanup_integration_and_acceptance.txt`. Controlled assertion failure induced AFTER readiness check passes; verified runner exits with code 1, server PID killed in OS (ESRCH), `/proc/PID` removed, port released and re-bound by TCP socket, zero process leaks. | Previously, negative trigger fired before server spawned. | Resolved: Trigger relocated to post-readiness; dedicated integration test proves real running server is terminated and port freed. |
-| **AC-07** | Existing Smoke Test Suite Integrity | **PASS** | `18_cycle12_process_escalation_and_acceptance.txt` & `19_cycle13_failure_cleanup_integration_and_acceptance.txt`. All 12 smoke tests pass 100% in `npm run test:smoke`. | None. | All health, static HTML, SPA fallback, API, 404, WebSocket, and shutdown checks pass. |
-| **AC-08** | Clean Validation Sequence Execution | **PASS** | `19_cycle13_failure_cleanup_integration_and_acceptance.txt` (Section 4). `npm ci`, `npm run lint`, `npm test`, `npm run build`, `npm run test:smoke`, `npm run test:escalation`, and `npm run test:failure-cleanup` all exit 0. | None. | Full pipeline executed and verified on Node.js 22. |
-| **AC-09** | Honest CI Status Reporting | **PASS** | Section 3 above. Remote CI reported as UNVERIFIED / BLOCKED pending repository owner push; zero fabricated URLs or runs. | False claims of remote CI success. | Resolved: Explicit distinction between local validation (PASS) and remote CI (UNVERIFIED). |
+| **AC-06** | Negative Test Nonzero Exit & Post-Readiness Cleanup | **PASS** | `scripts/test_failure_cleanup.ts`, `20_cycle14_process_tree_and_timeout_cleanup_acceptance.txt`. Controlled assertion failure induced AFTER readiness check passes; verified runner exits with code 1, server PID killed in OS (ESRCH), `/proc/PID` removed, recursive descendants empty, detached process group empty, port released and re-bound by TCP socket, zero process leaks. | Previously, negative trigger fired before server spawned and checked only direct children. | Resolved: Trigger relocated to post-readiness; process-tree and PGID inspection proves real running server, all descendants, and detached group are terminated. |
+| **AC-07** | Existing Smoke Test Suite Integrity | **PASS** | `20_cycle14_process_tree_and_timeout_cleanup_acceptance.txt` (Section 5). All 12 smoke tests pass 100% in `npm run test:smoke`. | None. | All health, static HTML, SPA fallback, API, 404, WebSocket, and shutdown checks pass. |
+| **AC-08** | Clean Validation Sequence Execution | **PASS** | `20_cycle14_process_tree_and_timeout_cleanup_acceptance.txt` (Section 5). `npm ci`, `npm run lint`, `npm test`, `npm run build`, `npm run test:smoke`, `npm run test:escalation`, `npm run test:failure-cleanup`, and `npm run test:timeout-cleanup` all exit 0. | None. | Full 7-stage pipeline executed and verified on Node.js 22. |
+| **AC-09** | Honest CI Status Reporting | **PASS** | Section 3 above. Remote CI reported as UNVERIFIED / BLOCKED pending repository owner push; prior commit `c7ee7088...` verified passed (Run ID: `40315841944`). Zero fabricated URLs or runs. | False claims of remote CI success. | Resolved: Explicit distinction between local validation (PASS) and remote CI (UNVERIFIED). |
 | **AC-10** | Strict Scope Boundary (No P0-02+) | **PASS** | Entire codebase and commit tree. P0-02 (Auth/RBAC), P0-03 (Tenant isolation), and P0-04 (Settlement) remain unstarted. | Scope creep. | Resolved: Strict P0-01 boundary maintained. |
+| **AC-11** | Timeout-Path Dual-Group Cleanup | **PASS** | `scripts/test_timeout_cleanup.ts`, `20_cycle14_process_tree_and_timeout_cleanup_acceptance.txt`. Harness timeout terminates BOTH runner group (`-runnerPid`) AND detached server group (`-serverPgid`), releasing port and leaving zero orphans. | Previously, harness timeout only killed runner PID, leaving detached server running as orphan. | Resolved: Dual-group termination with bounded timeout and lingering process diagnostics. |
 
 ---
 
@@ -90,7 +97,7 @@
 
 The following raw verification logs are preserved in `/evidence/p0-01/`:
 1. `01_baseline_inspection.txt`: Environment details, runtime versions, file inventory, and Git limitation statement.
-2. `02_npm_ci_output.txt`: Raw output of `npm ci --dry-run` and `npm ci` showing clean 429-package installation.
+2. `02_npm_ci_output.txt`: Raw output of `npm ci --dry-run` and `npm ci` showing clean 428-package installation.
 3. `03_lint_test_build.txt`: Complete logs for `npm run lint`, `npm test` (26/26 passing), test failure exit code simulation, and `npm run build`.
 4. `04_production_boot.txt`: Execution log of `NODE_ENV=production PORT=3006 npm start`.
 5. `05_http_api_smoke.txt`: Complete HTTP response headers and bodies for `GET /health`, `GET /`, and `GET /api/v1/competitions`.
@@ -107,17 +114,18 @@ The following raw verification logs are preserved in `/evidence/p0-01/`:
 16. `16_cycle10_production_smoke_and_acceptance.txt`: Tenth-cycle automated smoke test execution, 11/11 assertion verifications, and full AC-01 to AC-14 matrix.
 17. `17_final_p0_01_smoke_lifecycle_and_acceptance.txt`: Eleventh-cycle smoke test process lifecycle verification and negative check.
 18. `18_cycle12_process_escalation_and_acceptance.txt`: Twelfth-cycle process termination escalation defect fix, focused regression test execution, clean validation sequence, and process leak verification.
-19. `19_cycle13_failure_cleanup_integration_and_acceptance.txt`: Thirteenth-cycle post-readiness failure cleanup integration test, timeline synchronization verification, OS process/proc inspection, socket re-binding proof, and 6-step CI execution.
-20. `P0-01_REMEDIATION_EVIDENCE_REPORT.md`: This authoritative report.
+19. `19_cycle13_failure_cleanup_integration_and_acceptance.txt`: Thirteenth-cycle post-readiness failure cleanup integration test.
+20. `20_cycle14_process_tree_and_timeout_cleanup_acceptance.txt`: Fourteenth-cycle process tree and detached PGID enumeration, dual-group timeout cleanup, lingering diagnostic failure proof, and 7-stage CI validation.
+21. `P0-01_REMEDIATION_EVIDENCE_REPORT.md`: This authoritative report.
 
 ---
 
 ## 6. Outstanding Blockers & Resolution Prerequisites
 
 1. **Active Local Production Delivery Scope:**
-   - Zero outstanding technical blockers. All local production boot, health, API, WebSocket, HTML sanitization, graceful shutdown, process escalation, post-readiness failure cleanup, and regression smoke test requirements are verified PASS.
+   - Zero outstanding technical blockers. All local production boot, health, API, WebSocket, HTML sanitization, graceful shutdown, process escalation, post-readiness failure cleanup, timeout-path cleanup, and regression smoke test requirements are verified PASS.
 2. **Remote CI Execution (Documented Administrative Requirement):**
-   - The updated workflow steps (`npm run test:smoke`, `npm run test:escalation`, and `npm run test:failure-cleanup`) must run on GitHub Actions once the repository owner pushes the working tree commits to `origin/main`.
+   - The updated workflow steps (`npm run test:smoke`, `npm run test:escalation`, `npm run test:failure-cleanup`, and `npm run test:timeout-cleanup`) must run on GitHub Actions once the repository owner pushes the working tree commits to `origin/main`.
 3. **Public Cloud Infrastructure (Documented Future Prerequisite):**
    - **Cloud Orchestrator Automatic Restart & Deployment Probes:** Excluded from active delivery objective by project owner direction. Required if deploying to cloud: orchestrator manifests defining health probes and auto-restart policies.
    - **HTTPS/TLS and WSS Ingress Verification:** Excluded from active delivery objective by project owner direction. Required if deploying to cloud: public cloud domain, ingress controller, reverse proxy with TLS certificate termination.

@@ -12,6 +12,7 @@
     "test:smoke": "tsx scripts/production_smoke.ts",
     "test:escalation": "tsx scripts/test_termination_escalation.ts",
     "test:failure-cleanup": "tsx scripts/test_failure_cleanup.ts",
+    "test:timeout-cleanup": "tsx scripts/test_timeout_cleanup.ts",
     "preview": "vite preview --port 3000"
   },
   "dependencies": {
