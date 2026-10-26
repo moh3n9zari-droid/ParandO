@@ -359,11 +359,12 @@ export async function terminateServerGracefully(
   });
 }
 
-export function spawnProductionServer(port: number): ChildProcess {
+export function spawnProductionServer(port: number, extraEnv?: NodeJS.ProcessEnv): ChildProcess {
   const tsxBin = path.resolve('node_modules/.bin/tsx');
   const child = spawn(tsxBin, ['server.ts'], {
     env: {
       ...process.env,
+      ...extraEnv,
       NODE_ENV: 'production',
       PORT: String(port),
     },

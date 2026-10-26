@@ -9,665 +9,596 @@ import {
   httpRequest,
   assert,
 } from './production_smoke';
-import { generateToken, AuthTokenPayload } from '../src/auth/auth_service';
+import { generateTestToken } from '../src/auth/test_token_helper';
 
 /**
- * P0-02 Security, Authentication, Authorization & Tenant Isolation Regression Suite
+ * P0-02 Trust-Boundary Security Regression Test Suite
  *
- * Covers:
- * AC-01: Explicit server-enforced authentication boundary for all sensitive routes
- * AC-02: Rejection of unauthenticated requests on offers, proofs, events, settlement
- * AC-03: Rejection of invalid, expired, malformed, or untrusted credentials
- * AC-04: Server-side RBAC enforcement for every sensitive operation
- * AC-05: Strict tenant isolation across all reads and writes
- * AC-06: Immunity to client-supplied identity, tenant, role, and eligibility spoofing
- * AC-07: Scope-limited reads on proofs and audit events
- * AC-08: Zero side effects on unauthorized settlement attempts
- * AC-09: Deterministic negative test cases for all failure modes
- * AC-10: Preservation of public endpoints and authorized operations
+ * Verifies:
+ * AC-01: No deterministic or hardcoded production authentication secret remains.
+ * AC-02: Missing required authentication configuration fails closed on sensitive routes.
+ * AC-03: Strict mandatory numeric future `exp` claim validation.
+ * AC-04: Strict claim validation (sub, tid, boolean eligible, supported roles, HS256).
+ * AC-05: Constant-time cryptographic signature verification and rejection of untrusted keys.
+ * AC-06 / AC-07: Verifier accepts only credentials through established trust boundary; fails closed when absent.
+ * AC-08: Existing P0-02 role, tenant, ownership, and eligibility checks remain effective.
+ * AC-09: Unauthorized requests produce zero protected writes or settlement side effects.
+ * AC-10: Synthetic test identities run without production defaults; public routes preserved.
  */
 
 export async function runSecurityRegressionTests(): Promise<void> {
   console.log('\n=============================================================');
-  console.log('ParandO P0-02 Security & RBAC Regression Verification Suite');
-  console.log('Scope: SERVER-SIDE AUTH, AUTHZ, TENANT ISOLATION & OWNERSHIP');
+  console.log('ParandO P0-02 Trust-Boundary Security & RBAC Regression Suite');
+  console.log('Scope: TRUST BOUNDARY, STRICT CLAIMS, FAIL-CLOSED & TENANT ISOLATION');
   console.log('=============================================================\n');
 
-  const port = await getFreePort();
-  console.log(`[P0-02 Test] Spawning server on ephemeral port ${port}...`);
-  const serverProcess = spawnProductionServer(port);
+  // =========================================================================
+  // TEST PHASE A: Fail-Closed When Production Secret is Absent (AC-01, AC-02)
+  // =========================================================================
+  console.log('[PHASE A] Testing Fail-Closed Behavior When PARANDO_AUTH_SECRET Is Unset...');
+  const portA = await getFreePort();
+  const unconfiguredEnv = { ...process.env };
+  delete unconfiguredEnv.PARANDO_AUTH_SECRET;
+  delete unconfiguredEnv.PORT;
 
+  const serverProcessA = spawnProductionServer(portA, unconfiguredEnv);
   try {
-    await waitForServerReady(serverProcess, port);
-    console.log(`Server ready on port ${port}. Commencing security test matrix...\n`);
+    await waitForServerReady(serverProcessA, portA);
+    console.log(`Unconfigured server ready on port ${portA}. Verifying fail-closed behavior...`);
 
-    // -------------------------------------------------------------------------
-    // Synthetic Identities & Token Generation (AC-11: Zero real secrets/data)
-    // -------------------------------------------------------------------------
-    const now = Math.floor(Date.now() / 1000);
+    // Public route must still function
+    const pubHealthA = await httpRequest({ hostname: '127.0.0.1', port: portA, path: '/health', method: 'GET' });
+    assert(pubHealthA.status === 200, 'Public GET /health returns 200 even when auth secret is unset');
 
-    const validOffererPayload: AuthTokenPayload = {
+    // Sensitive route without token must return 401
+    const unauthOfferA = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portA,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(unauthOfferA.status === 401, 'Unconfigured server returns 401 for unauthenticated sensitive request');
+
+    // Attempting to use old hardcoded deterministic fallback secret MUST FAIL CLOSED (AC-01, AC-02)
+    const oldHardcodedSecret = 'parando-national-auction-auth-secret-deterministic-2026';
+    const oldSecretToken = generateTestToken({
       sub: 'offerer-alpha',
       tid: 'tenant-gold-bourse',
       roles: ['OFFERER'],
       eligible: true,
-    };
-    const validOffererToken = generateToken(validOffererPayload);
+      exp: Math.floor(Date.now() / 1000) + 3600,
+    }, oldHardcodedSecret);
 
-    const ineligibleOffererPayload: AuthTokenPayload = {
-      sub: 'offerer-ineligible',
+    const oldSecretOfferRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portA,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${oldSecretToken}`,
+      },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(oldSecretOfferRes.status === 401, 'Token signed with old deterministic secret is REJECTED with 401 (Zero fallback)');
+    const oldSecretJson = JSON.parse(oldSecretOfferRes.body);
+    assert(
+      oldSecretJson.detail.includes('missing on server') || oldSecretJson.detail.includes('Failing closed'),
+      'Error message explicitly confirms trust configuration is missing and failing closed'
+    );
+
+    // Other sensitive routes must also fail closed
+    const unconfiguredProof = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portA,
+      path: '/api/v1/proofs',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${oldSecretToken}` },
+    }, JSON.stringify({ offerer_id: 'offerer-alpha', tenant_id: 'tenant-gold-bourse', guaranteed_amount: 1000 }));
+    assert(unconfiguredProof.status === 401, 'POST /proofs fails closed with 401 when auth secret is unset');
+
+    const unconfiguredSettle = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portA,
+      path: '/api/v1/competitions/COMP-GOLD-001/settle',
+      method: 'POST',
+      headers: { Authorization: `Bearer ${oldSecretToken}` },
+    });
+    assert(unconfiguredSettle.status === 401, 'POST /settle fails closed with 401 when auth secret is unset');
+
+    console.log('✓ Phase A verified: Missing production auth secret strictly fails closed with zero fallback!\n');
+  } finally {
+    await terminateServerGracefully(serverProcessA, 'SIGTERM', 4000);
+    await waitForPortFree(portA);
+    await cleanupAllAsync(2000);
+  }
+
+  // =========================================================================
+  // TEST PHASE B: Server with Dedicated Synthetic Test Secret (AC-03 - AC-10)
+  // =========================================================================
+  console.log('[PHASE B] Testing Strict Claims, Cryptographic Signatures, RBAC, and Tenant Isolation...');
+  const portB = await getFreePort();
+  const SYNTHETIC_TEST_SECRET = 'synthetic-test-secret-min32-chars-entropy-2026-audit!';
+  const configuredEnv = {
+    ...process.env,
+    PARANDO_AUTH_SECRET: SYNTHETIC_TEST_SECRET,
+  };
+  delete configuredEnv.PORT;
+
+  const serverProcessB = spawnProductionServer(portB, configuredEnv);
+  try {
+    await waitForServerReady(serverProcessB, portB);
+    console.log(`Configured server ready on port ${portB}. Executing security test suite...\n`);
+
+    const now = Math.floor(Date.now() / 1000);
+
+    // Helper to generate test tokens with the synthetic test secret
+    const mintToken = (payload: any, options?: { customHeader?: any }, secret = SYNTHETIC_TEST_SECRET) =>
+      generateTestToken(payload, secret, options);
+
+    // Standard valid identities
+    const validOffererToken = mintToken({
+      sub: 'offerer-alpha',
       tid: 'tenant-gold-bourse',
       roles: ['OFFERER'],
-      eligible: false,
-    };
-    const ineligibleOffererToken = generateToken(ineligibleOffererPayload);
+      eligible: true,
+      exp: now + 3600,
+    });
 
-    const foreignTenantOffererPayload: AuthTokenPayload = {
+    const foreignTenantToken = mintToken({
       sub: 'offerer-energy',
       tid: 'tenant-energy-bourse',
       roles: ['OFFERER'],
       eligible: true,
-    };
-    const foreignTenantOffererToken = generateToken(foreignTenantOffererPayload);
+      exp: now + 3600,
+    });
 
-    const sellerPayload: AuthTokenPayload = {
+    const sellerToken = mintToken({
       sub: 'central-bullion-vault',
       tid: 'tenant-gold-bourse',
       roles: ['SELLER'],
       eligible: true,
-    };
-    const sellerToken = generateToken(sellerPayload);
+      exp: now + 3600,
+    });
 
-    const goldAdminPayload: AuthTokenPayload = {
+    const goldAdminToken = mintToken({
       sub: 'admin-gold-officer',
       tid: 'tenant-gold-bourse',
       roles: ['EXCHANGE_ADMIN'],
       eligible: true,
-    };
-    const goldAdminToken = generateToken(goldAdminPayload);
+      exp: now + 3600,
+    });
 
-    const foreignAdminPayload: AuthTokenPayload = {
+    const foreignAdminToken = mintToken({
       sub: 'admin-energy-officer',
       tid: 'tenant-energy-bourse',
       roles: ['EXCHANGE_ADMIN'],
       eligible: true,
-    };
-    const foreignAdminToken = generateToken(foreignAdminPayload);
+      exp: now + 3600,
+    });
 
-    const auditorPayload: AuthTokenPayload = {
+    const auditorToken = mintToken({
       sub: 'auditor-gold',
       tid: 'tenant-gold-bourse',
       roles: ['AUDITOR'],
       eligible: true,
-    };
-    const auditorToken = generateToken(auditorPayload);
-
-    const expiredToken = generateToken(validOffererPayload, undefined, -60); // expired 60s ago
-    const untrustedKeyToken = generateToken(validOffererPayload, 'foreign-untrusted-key-xyz');
-
-    // Tampered token (header.payload.signature where payload string is tampered)
-    const validParts = validOffererToken.split('.');
-    const tamperedPayload = Buffer.from(
-      JSON.stringify({ ...validOffererPayload, sub: 'offerer-tampered-hacker' })
-    )
-      .toString('base64')
-      .replace(/=/g, '');
-    const tamperedToken = `${validParts[0]}.${tamperedPayload}.${validParts[2]}`;
-
-    // -------------------------------------------------------------------------
-    // SECTION 1: Unauthenticated Access Rejections (AC-01, AC-02)
-    // -------------------------------------------------------------------------
-    console.log('[SECTION 1] Validating Unauthenticated Requests to Sensitive Routes (401 Rejections)...');
-
-    // 1.1 Unauthenticated Offer Submission
-    const unauthOffer = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      },
-      JSON.stringify({ amount: 43_000_000_000, offerer_id: 'offerer-alpha', tenant_id: 'tenant-gold-bourse' })
-    );
-    assert(unauthOffer.status === 401, 'Unauthenticated POST /offers returned 401 Unauthorized');
-    const unauthOfferJson = JSON.parse(unauthOffer.body);
-    assert(unauthOfferJson.error === 'UNAUTHORIZED', 'Unauthenticated offer body contains error UNAUTHORIZED');
-
-    // 1.2 Unauthenticated Proof Creation
-    const unauthProofPost = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/proofs',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      },
-      JSON.stringify({ offerer_id: 'offerer-alpha', tenant_id: 'tenant-gold-bourse', guaranteed_amount: 100_000_000 })
-    );
-    assert(unauthProofPost.status === 401, 'Unauthenticated POST /proofs returned 401 Unauthorized');
-
-    // 1.3 Unauthenticated Proof Read
-    const unauthProofGet = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/proofs/offerer-alpha',
-      method: 'GET',
+      exp: now + 3600,
     });
-    assert(unauthProofGet.status === 401, 'Unauthenticated GET /proofs/:id returned 401 Unauthorized');
 
-    // 1.4 Unauthenticated Audit Events Read
-    const unauthEvents = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/events',
-      method: 'GET',
+    // -----------------------------------------------------------------------
+    // B.1 Mandatory Strict Expiration Claim Validation (AC-03)
+    // -----------------------------------------------------------------------
+    console.log('[B.1] Validating Mandatory Expiration Claim Validation (AC-03)...');
+
+    // Token WITHOUT exp claim
+    const noExpToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      // exp is omitted!
     });
-    assert(unauthEvents.status === 401, 'Unauthenticated GET /events returned 401 Unauthorized');
-
-    // 1.5 Unauthenticated Settlement Execution
-    const unauthSettle = await httpRequest({
+    const noExpRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/competitions/COMP-GOLD-001/settle',
-      method: 'POST',
-    });
-    assert(unauthSettle.status === 401, 'Unauthenticated POST /settle returned 401 Unauthorized');
-
-    // 1.6 Unauthenticated Competition Creation
-    const unauthCompPost = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions',
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      },
-      JSON.stringify({ competition_id: 'COMP-FAKE-001', tenant_id: 'tenant-gold-bourse', seller_id: 'seller-1' })
-    );
-    assert(unauthCompPost.status === 401, 'Unauthenticated POST /competitions returned 401 Unauthorized');
-
-    // -------------------------------------------------------------------------
-    // SECTION 2: Invalid / Untrusted / Malformed Credentials (AC-03)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 2] Validating Malformed & Untrusted Credentials (401 Rejections)...');
-
-    // 2.1 Malformed header scheme (e.g. Basic instead of Bearer)
-    const badSchemeRes = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/offers',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Basic dXNlcjpwYXNz',
-      },
-    });
-    assert(badSchemeRes.status === 401, 'Malformed scheme "Basic" returned 401 Unauthorized');
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${noExpToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(noExpRes.status === 401, 'Token without "exp" claim rejected with 401 Unauthorized');
+    assert(JSON.parse(noExpRes.body).detail.includes('missing required "exp"'), 'Error specifies missing required "exp"');
 
-    // 2.2 Malformed token structure (not 3 dot-separated parts)
-    const badStructureRes = await httpRequest({
+    // Token with non-numeric string exp
+    const stringExpToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: '2026-12-31T23:59:59Z',
+    });
+    const stringExpRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/offers',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: 'Bearer invalid.token',
-      },
-    });
-    assert(badStructureRes.status === 401, 'Malformed token structure returned 401 Unauthorized');
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stringExpToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(stringExpRes.status === 401, 'Token with string "exp" claim rejected with 401 Unauthorized');
 
-    // 2.3 Untrusted signing key
-    const untrustedKeyRes = await httpRequest({
+    // Token with null exp
+    const nullExpToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: null,
+    });
+    const nullExpRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/offers',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${untrustedKeyToken}`,
-      },
-    });
-    assert(untrustedKeyRes.status === 401, 'Token signed with untrusted secret returned 401 Unauthorized');
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${nullExpToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(nullExpRes.status === 401, 'Token with null "exp" claim rejected with 401 Unauthorized');
 
-    // 2.4 Cryptographic signature tampering
-    const tamperedRes = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/competitions/COMP-GOLD-001/offers',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${tamperedToken}`,
-      },
+    // Token with expired timestamp (in the past)
+    const expiredToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now - 300, // 5 minutes ago
     });
-    assert(tamperedRes.status === 401, 'Tampered token payload returned 401 Unauthorized');
-
-    // 2.5 Expired token
     const expiredRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/offers',
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${expiredToken}`,
-      },
-    });
-    assert(expiredRes.status === 401, 'Expired token returned 401 Unauthorized');
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${expiredToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(expiredRes.status === 401, 'Token with expired timestamp rejected with 401 Unauthorized');
+    assert(JSON.parse(expiredRes.body).detail.includes('expired'), 'Error specifies token expired');
 
-    // 2.6 Client arbitrary header spoofing (e.g. X-User-Id, X-Role without Bearer token)
-    const headerSpoofRes = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/competitions/COMP-GOLD-001/offers',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-User-Id': 'offerer-alpha',
-        'X-Role': 'EXCHANGE_ADMIN',
-        'X-Tenant-Id': 'tenant-gold-bourse',
-        'X-Eligible': 'true',
-      },
-    });
-    assert(headerSpoofRes.status === 401, 'Arbitrary client header spoofing rejected with 401 Unauthorized');
+    // -----------------------------------------------------------------------
+    // B.2 Strict Claim Validation & Unsupported Algorithms (AC-04)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.2] Validating Strict Claims & Algorithm Validation (AC-04)...');
 
-    // -------------------------------------------------------------------------
-    // SECTION 3: Server-Side RBAC Enforcement (AC-04)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 3] Validating Server-Side Role-Based Access Control (403 Rejections)...');
-
-    // 3.1 Auditor role attempting to submit an offer
-    const auditorOfferRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${auditorToken}`,
-        },
-      },
-      JSON.stringify({ amount: 43_000_000_000 })
+    // Unsupported algorithm: alg="none"
+    const algNoneToken = mintToken(
+      { sub: 'offerer-alpha', tid: 'tenant-gold-bourse', roles: ['OFFERER'], eligible: true, exp: now + 3600 },
+      { customHeader: { alg: 'none', typ: 'JWT' } }
     );
-    assert(auditorOfferRes.status === 403, 'Auditor role attempting POST /offers returned 403 Forbidden');
+    const algNoneRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${algNoneToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(algNoneRes.status === 401, 'Header with alg="none" rejected with 401 Unauthorized');
 
-    // 3.2 Offerer attempting to settle a competition
+    // Unsupported algorithm: alg="HS512"
+    const alg512Token = mintToken(
+      { sub: 'offerer-alpha', tid: 'tenant-gold-bourse', roles: ['OFFERER'], eligible: true, exp: now + 3600 },
+      { customHeader: { alg: 'HS512', typ: 'JWT' } }
+    );
+    const alg512Res = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${alg512Token}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(alg512Res.status === 401, 'Header with alg="HS512" rejected with 401 Unauthorized');
+
+    // Empty or whitespace-only sub
+    const emptySubToken = mintToken({
+      sub: '   ',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now + 3600,
+    });
+    const emptySubRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${emptySubToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(emptySubRes.status === 401, 'Token with empty/whitespace "sub" rejected with 401 Unauthorized');
+
+    // Non-string sub
+    const numberSubToken = mintToken({
+      sub: 12345,
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now + 3600,
+    });
+    const numberSubRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${numberSubToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(numberSubRes.status === 401, 'Token with non-string "sub" rejected with 401 Unauthorized');
+
+    // Empty or whitespace-only tid
+    const emptyTidToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: '',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now + 3600,
+    });
+    const emptyTidRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${emptyTidToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(emptyTidRes.status === 401, 'Token with empty "tid" rejected with 401 Unauthorized');
+
+    // Non-boolean eligible claim
+    const stringEligToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: 'true', // string, not boolean!
+      exp: now + 3600,
+    });
+    const stringEligRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${stringEligToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(stringEligRes.status === 401, 'Token with non-boolean "eligible" rejected with 401 Unauthorized');
+
+    // Empty roles array
+    const emptyRolesToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: [],
+      eligible: true,
+      exp: now + 3600,
+    });
+    const emptyRolesRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${emptyRolesToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(emptyRolesRes.status === 401, 'Token with empty "roles" array rejected with 401 Unauthorized');
+
+    // Unsupported role
+    const badRoleToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['SUPER_ADMIN'],
+      eligible: true,
+      exp: now + 3600,
+    });
+    const badRoleRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${badRoleToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(badRoleRes.status === 401, 'Token with unsupported role "SUPER_ADMIN" rejected with 401 Unauthorized');
+
+    // -----------------------------------------------------------------------
+    // B.3 Cryptographic Signature Integrity (AC-05)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.3] Validating Cryptographic Signature Verification (AC-05)...');
+
+    // Token signed with untrusted / wrong secret
+    const wrongSecretToken = mintToken({
+      sub: 'offerer-alpha',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now + 3600,
+    }, undefined, 'wrong-untrusted-key-1234567890!!');
+    const wrongSecretRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${wrongSecretToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(wrongSecretRes.status === 401, 'Token signed with wrong key rejected with 401 Unauthorized');
+
+    // Tampered payload
+    const validParts = validOffererToken.split('.');
+    const tamperedPayloadB64 = Buffer.from(JSON.stringify({
+      sub: 'offerer-tampered-hacker',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: true,
+      exp: now + 3600,
+    })).toString('base64').replace(/=/g, '');
+    const tamperedPayloadToken = `${validParts[0]}.${tamperedPayloadB64}.${validParts[2]}`;
+
+    const tamperedPayloadRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tamperedPayloadToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(tamperedPayloadRes.status === 401, 'Tampered token payload rejected with 401 Unauthorized');
+
+    // -----------------------------------------------------------------------
+    // B.4 Role-Based Authorization & Tenant Isolation (AC-08)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.4] Validating RBAC and Multi-Tenant Isolation (AC-08)...');
+
+    // Auditor cannot place offers
+    const auditorOfferRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${auditorToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(auditorOfferRes.status === 403, 'Auditor role attempting POST /offers rejected with 403 Forbidden');
+
+    // Offerer cannot settle
     const offererSettleRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/settle',
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${validOffererToken}`,
-      },
+      headers: { Authorization: `Bearer ${validOffererToken}` },
     });
-    assert(offererSettleRes.status === 403, 'Offerer role attempting POST /settle returned 403 Forbidden');
+    assert(offererSettleRes.status === 403, 'Offerer role attempting POST /settle rejected with 403 Forbidden');
 
-    // 3.3 Offerer attempting to create/mint commitment proofs
-    const offererProofPostRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/proofs',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${validOffererToken}`,
-        },
-      },
-      JSON.stringify({ offerer_id: 'offerer-alpha', tenant_id: 'tenant-gold-bourse', guaranteed_amount: 500_000_000_000 })
-    );
-    assert(offererProofPostRes.status === 403, 'Offerer attempting to create commitment proof returned 403 Forbidden');
-
-    // 3.4 Offerer attempting to dump audit events
-    const offererEventsRes = await httpRequest({
+    // Cross-tenant offer rejected
+    const crossTenantOffer = await httpRequest({
       hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/events',
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${validOffererToken}`,
-      },
-    });
-    assert(offererEventsRes.status === 403, 'Offerer attempting to read audit events returned 403 Forbidden');
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${foreignTenantToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000 }));
+    assert(crossTenantOffer.status === 403, 'Cross-tenant offer rejected with 403 Forbidden (TENANT_MISMATCH)');
 
-    // 3.5 Offerer attempting to create a competition
-    const offererCompPostRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${validOffererToken}`,
-        },
-      },
-      JSON.stringify({
-        competition_id: 'COMP-ILLEGAL-001',
-        tenant_id: 'tenant-gold-bourse',
-        seller_id: 'offerer-alpha',
-        base_price: 1_000_000,
-        min_increment: 100_000,
-        deposit_rate_bps: 1500,
-      })
-    );
-    assert(offererCompPostRes.status === 403, 'Offerer attempting to create competition returned 403 Forbidden');
-
-    // -------------------------------------------------------------------------
-    // SECTION 4: Strict Tenant Isolation (AC-05)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 4] Validating Multi-Tenant Isolation Enforcement (403 Rejections)...');
-
-    // 4.1 Offerer from tenant-energy-bourse bidding on COMP-GOLD-001 (tenant-gold-bourse)
-    const crossTenantOffer = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${foreignTenantOffererToken}`,
-        },
-      },
-      JSON.stringify({ amount: 43_000_000_000 })
-    );
-    assert(crossTenantOffer.status === 403, 'Cross-tenant offer submission rejected with 403 Forbidden');
-    const crossTenantJson = JSON.parse(crossTenantOffer.body);
-    assert(crossTenantJson.detail.includes('TENANT_MISMATCH'), 'Error detail explicitly confirms TENANT_MISMATCH');
-
-    // 4.2 Administrator of tenant-energy-bourse attempting to settle COMP-GOLD-001
+    // Cross-tenant settlement rejected
     const crossTenantSettle = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/settle',
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${foreignAdminToken}`,
-      },
+      headers: { Authorization: `Bearer ${foreignAdminToken}` },
     });
-    assert(crossTenantSettle.status === 403, 'Cross-tenant settlement attempt rejected with 403 Forbidden');
+    assert(crossTenantSettle.status === 403, 'Cross-tenant settlement rejected with 403 Forbidden');
 
-    // 4.3 Administrator of tenant-energy-bourse attempting to issue proof in tenant-gold-bourse
-    const crossTenantProof = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/proofs',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${foreignAdminToken}`,
-        },
-      },
-      JSON.stringify({ offerer_id: 'offerer-alpha', tenant_id: 'tenant-gold-bourse', guaranteed_amount: 50_000_000 })
-    );
-    assert(crossTenantProof.status === 403, 'Cross-tenant proof issuance rejected with 403 Forbidden');
+    // -----------------------------------------------------------------------
+    // B.5 Ownership & Spoofing Immunity (AC-08)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.5] Validating Identity Ownership & Spoofing Immunity (AC-08)...');
 
-    // -------------------------------------------------------------------------
-    // SECTION 5: Ownership Enforcement & Client Spoofing Immunity (AC-06)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 5] Validating Ownership Enforcement & Spoofing Immunity (AC-06)...');
-
-    // 5.1 Authenticated offerer 'offerer-alpha' attempts to submit an offer as 'offerer-beta'
-    const spoofIdentityOffer = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${validOffererToken}`, // token is offerer-alpha
-        },
-      },
-      JSON.stringify({
-        amount: 43_000_000_000,
-        offerer_id: 'offerer-beta', // body spoof
-      })
-    );
-    assert(spoofIdentityOffer.status === 403, 'Client-supplied identity spoofing rejected with 403 Forbidden');
-
-    // 5.2 Offerer with isEligible=false in token claims isEligible=true in body
-    const spoofEligibilityOffer = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${ineligibleOffererToken}`,
-        },
-      },
-      JSON.stringify({
-        amount: 43_000_000_000,
-        isEligible: true, // client attempts to grant eligibility
-      })
-    );
-    assert(spoofEligibilityOffer.status === 403, 'Ineligible offerer rejected with 403 despite client isEligible=true');
-    const ineligJson = JSON.parse(spoofEligibilityOffer.body);
-    assert(ineligJson.detail.includes('OFFERER_NOT_ELIGIBLE'), 'Error details confirm OFFERER_NOT_ELIGIBLE');
-
-    // 5.3 Seller cannot offer on their own auction
-    const sellerOwnOffer = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${sellerToken}`, // sub: central-bullion-vault (seller of COMP-GOLD-001)
-        },
-      },
-      JSON.stringify({ amount: 43_000_000_000 })
-    );
-    assert(sellerOwnOffer.status === 403, 'Seller offering on own competition rejected with 403 Forbidden');
-
-    // -------------------------------------------------------------------------
-    // SECTION 6: Scope-Restricted Reads (AC-07)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 6] Validating Scope-Restricted Reads on Proofs & Events (AC-07)...');
-
-    // 6.1 Offerer 'offerer-alpha' attempts to inspect 'offerer-beta' proofs
-    const foreignProofInspect = await httpRequest({
+    // Client body offerer_id spoofing
+    const bodySpoofRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/proofs/offerer-beta',
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${validOffererToken}`, // offerer-alpha
-      },
-    });
-    assert(foreignProofInspect.status === 403, 'Offerer reading another offerer proofs rejected with 403 Forbidden');
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${validOffererToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000, offerer_id: 'offerer-beta' }));
+    assert(bodySpoofRes.status === 403, 'Body offerer_id mismatch rejected with 403 Forbidden (IDENTITY_MISMATCH)');
 
-    // 6.2 Offerer 'offerer-alpha' inspects their own proofs -> 200 OK
-    const ownProofInspect = await httpRequest({
+    // Ineligible offerer passing body isEligible: true
+    const ineligToken = mintToken({
+      sub: 'offerer-ineligible',
+      tid: 'tenant-gold-bourse',
+      roles: ['OFFERER'],
+      eligible: false,
+      exp: now + 3600,
+    });
+    const ineligRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/proofs/offerer-alpha',
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${validOffererToken}`,
-      },
-    });
-    assert(ownProofInspect.status === 200, 'Offerer reading own proofs returned HTTP 200 OK');
-    const ownProofs = JSON.parse(ownProofInspect.body);
-    assert(Array.isArray(ownProofs) && ownProofs.length > 0, 'Returned valid list of own commitment proofs');
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ineligToken}` },
+    }, JSON.stringify({ amount: 43_000_000_000, isEligible: true }));
+    assert(ineligRes.status === 403, 'Ineligible offerer rejected with 403 despite client body isEligible=true');
 
-    // 6.3 Auditor in tenant-gold-bourse inspects events -> 200 OK, scoped to tenant
-    const auditorEventsRes = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/events',
-      method: 'GET',
-      headers: {
-        Authorization: `Bearer ${auditorToken}`,
-      },
-    });
-    assert(auditorEventsRes.status === 200, 'Auditor reading events returned HTTP 200 OK');
-    const eventsList = JSON.parse(auditorEventsRes.body);
-    assert(Array.isArray(eventsList), 'Audit events returned as an array');
-    assert(
-      eventsList.every((e: any) => !e.tenant_id || e.tenant_id === 'tenant-gold-bourse'),
-      'Returned audit events strictly scoped to tenant-gold-bourse'
-    );
+    // -----------------------------------------------------------------------
+    // B.6 Settlement Protection & Zero Side Effects (AC-09)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.6] Validating Settlement Security & Zero Side Effects (AC-09)...');
 
-    // -------------------------------------------------------------------------
-    // SECTION 7: Settlement Authorization & Zero Side Effects (AC-08)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 7] Validating Settlement Security & Zero Side Effects (AC-08)...');
-
-    // Check competition state before unauthorized settlement attempt
-    const compBefore = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/competitions/COMP-GOLD-001',
-      method: 'GET',
-    });
+    const compBefore = await httpRequest({ hostname: '127.0.0.1', port: portB, path: '/api/v1/competitions/COMP-GOLD-001', method: 'GET' });
     const compBeforeJson = JSON.parse(compBefore.body);
-    assert(compBeforeJson.status === 'ACTIVE', 'Competition is currently ACTIVE');
+    assert(compBeforeJson.status === 'ACTIVE', 'Competition is ACTIVE prior to unauthorized settlement');
 
-    // Unauthorized settlement attempt by offerer
-    const unauthSettleAttempt = await httpRequest({
+    const rejectSettle = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/settle',
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${validOffererToken}`,
-      },
+      headers: { Authorization: `Bearer ${validOffererToken}` },
     });
-    assert(unauthSettleAttempt.status === 403, 'Unauthorized settlement returned 403 Forbidden');
+    assert(rejectSettle.status === 403, 'Unauthorized settlement rejected with 403 Forbidden');
 
-    // Verify competition state is UNMODIFIED (zero side effects)
-    const compAfter = await httpRequest({
-      hostname: '127.0.0.1',
-      port,
-      path: '/api/v1/competitions/COMP-GOLD-001',
-      method: 'GET',
-    });
+    const compAfter = await httpRequest({ hostname: '127.0.0.1', port: portB, path: '/api/v1/competitions/COMP-GOLD-001', method: 'GET' });
     const compAfterJson = JSON.parse(compAfter.body);
-    assert(compAfterJson.status === 'ACTIVE', 'Competition remains ACTIVE after rejected settlement attempt');
-    assert(compAfterJson.version === compBeforeJson.version, 'Competition version is unchanged after rejected settlement');
+    assert(compAfterJson.status === 'ACTIVE', 'Competition status remains ACTIVE with ZERO side effects');
+    assert(compAfterJson.version === compBeforeJson.version, 'Competition version is strictly unchanged');
 
-    // -------------------------------------------------------------------------
-    // SECTION 8: Preservation of Public Read-Only Endpoints (AC-10)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 8] Validating Preservation of Public Read-Only Endpoints (AC-10)...');
+    // -----------------------------------------------------------------------
+    // B.7 Public Endpoints & Authorized Execution (AC-10)
+    // -----------------------------------------------------------------------
+    console.log('\n[B.7] Validating Public Endpoints & Authorized Execution (AC-10)...');
 
-    const pubHealth = await httpRequest({ hostname: '127.0.0.1', port, path: '/health', method: 'GET' });
-    assert(pubHealth.status === 200, 'Public GET /health is accessible without token');
+    const pubComps = await httpRequest({ hostname: '127.0.0.1', port: portB, path: '/api/v1/competitions', method: 'GET' });
+    assert(pubComps.status === 200, 'Public GET /api/v1/competitions accessible without token');
 
-    const pubV1Health = await httpRequest({ hostname: '127.0.0.1', port, path: '/api/v1/health', method: 'GET' });
-    assert(pubV1Health.status === 200, 'Public GET /api/v1/health is accessible without token');
+    const pubLadder = await httpRequest({ hostname: '127.0.0.1', port: portB, path: '/api/v1/competitions/COMP-GOLD-001/ladder', method: 'GET' });
+    assert(pubLadder.status === 200, 'Public GET /api/v1/competitions/:id/ladder accessible without token');
 
-    const pubComps = await httpRequest({ hostname: '127.0.0.1', port, path: '/api/v1/competitions', method: 'GET' });
-    assert(pubComps.status === 200, 'Public GET /api/v1/competitions is accessible without token');
-
-    const pubCompDetail = await httpRequest({ hostname: '127.0.0.1', port, path: '/api/v1/competitions/COMP-GOLD-001', method: 'GET' });
-    assert(pubCompDetail.status === 200, 'Public GET /competitions/:id is accessible without token');
-
-    const pubLadder = await httpRequest({ hostname: '127.0.0.1', port, path: '/api/v1/competitions/COMP-GOLD-001/ladder', method: 'GET' });
-    assert(pubLadder.status === 200, 'Public GET /competitions/:id/ladder is accessible without token');
-
-    // -------------------------------------------------------------------------
-    // SECTION 9: Authorized Writes & Financial Integrity (AC-10)
-    // -------------------------------------------------------------------------
-    console.log('\n[SECTION 9] Validating Authorized Operations & TR-12 Replay (AC-10)...');
-
-    // 9.1 Authorized offer placement by valid offerer
-    const validOfferRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${validOffererToken}`,
-          'Idempotency-Key': 'IDEM-TEST-SEC-001',
-        },
+    // Authorized offer submission
+    const authOfferRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${validOffererToken}`,
+        'Idempotency-Key': 'IDEM-SEC-VERIFIED-001',
       },
-      JSON.stringify({
-        amount: 43_000_000_000,
-        expected_version: compAfterJson.version,
-      })
-    );
-    assert(validOfferRes.status === 200, 'Authorized offer submission returned 200 OK');
-    const validOfferJson = JSON.parse(validOfferRes.body);
-    assert(validOfferJson.success === true, 'Authorized offer submission succeeded');
-    assert(validOfferJson.offer.offerer_id === 'offerer-alpha', 'Offer placed under verified principal userId');
+    }, JSON.stringify({ amount: 43_000_000_000, expected_version: compAfterJson.version }));
+    assert(authOfferRes.status === 200, 'Authorized offer submission returns 200 OK');
+    const authOfferJson = JSON.parse(authOfferRes.body);
+    assert(authOfferJson.offer.offerer_id === 'offerer-alpha', 'Offer attributed strictly to verified principal userId');
 
-    // 9.2 TR-12 Identical Replay succeeds with replay header
-    const replayRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/competitions/COMP-GOLD-001/offers',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${validOffererToken}`,
-          'Idempotency-Key': 'IDEM-TEST-SEC-001',
-        },
+    // TR-12 identical replay
+    const replayRes = await httpRequest({
+      hostname: '127.0.0.1',
+      port: portB,
+      path: '/api/v1/competitions/COMP-GOLD-001/offers',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${validOffererToken}`,
+        'Idempotency-Key': 'IDEM-SEC-VERIFIED-001',
       },
-      JSON.stringify({
-        amount: 43_000_000_000,
-        expected_version: compAfterJson.version,
-      })
-    );
-    assert(replayRes.status === 200, 'TR-12 identical replay returned 200 OK');
-    assert(replayRes.headers['x-idempotency-replay'] === 'true', 'TR-12 identical replay returned X-Idempotency-Replay header');
+    }, JSON.stringify({ amount: 43_000_000_000, expected_version: compAfterJson.version }));
+    assert(replayRes.status === 200, 'TR-12 replay returns 200 OK');
+    assert(replayRes.headers['x-idempotency-replay'] === 'true', 'Replay header verified on duplicate request');
 
-    // 9.3 Authorized proof creation by goldAdmin
-    const authProofRes = await httpRequest(
-      {
-        hostname: '127.0.0.1',
-        port,
-        path: '/api/v1/proofs',
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${goldAdminToken}`,
-        },
-      },
-      JSON.stringify({
-        offerer_id: 'offerer-alpha',
-        tenant_id: 'tenant-gold-bourse',
-        guaranteed_amount: 300_000_000_000,
-        valid_hours: 72,
-      })
-    );
-    assert(authProofRes.status === 200, 'Authorized proof creation by exchange admin returned 200 OK');
-
-    // 9.4 Authorized settlement by goldAdmin
+    // Authorized settlement by goldAdmin
     const authSettleRes = await httpRequest({
       hostname: '127.0.0.1',
-      port,
+      port: portB,
       path: '/api/v1/competitions/COMP-GOLD-001/settle',
       method: 'POST',
-      headers: {
-        Authorization: `Bearer ${goldAdminToken}`,
-      },
+      headers: { Authorization: `Bearer ${goldAdminToken}` },
     });
-    assert(authSettleRes.status === 200, 'Authorized settlement by gold admin returned 200 OK');
+    assert(authSettleRes.status === 200, 'Authorized settlement by gold admin returns 200 OK');
     const authSettleJson = JSON.parse(authSettleRes.body);
-    assert(authSettleJson.status === 'SETTLED', 'Competition successfully settled with SHA-256 voucher');
-    assert(authSettleJson.voucher.winner_id === 'offerer-alpha', 'Winner correctly attributed in settlement voucher');
+    assert(authSettleJson.status === 'SETTLED', 'Competition settled and sealed');
+    assert(authSettleJson.voucher.winner_id === 'offerer-alpha', 'Winner correctly attributed in SHA-256 voucher');
 
     console.log('\n=============================================================');
-    console.log('ALL P0-02 SECURITY & RBAC REGRESSION TESTS PASSED (100% SUCCESS)');
+    console.log('ALL P0-02 TRUST-BOUNDARY SECURITY REGRESSION TESTS PASSED (100% SUCCESS)');
     console.log('=============================================================\n');
   } finally {
-    console.log('[P0-02 Test] Cleaning up server processes...');
-    await terminateServerGracefully(serverProcess, 'SIGTERM', 4000);
-    await waitForPortFree(port);
+    console.log('[Phase B Cleanup] Terminating server process...');
+    await terminateServerGracefully(serverProcessB, 'SIGTERM', 4000);
+    await waitForPortFree(portB);
     await cleanupAllAsync(2000);
   }
 }

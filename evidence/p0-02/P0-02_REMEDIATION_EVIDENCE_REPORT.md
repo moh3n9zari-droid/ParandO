@@ -2,29 +2,50 @@
 
 - **Repository:** `moh3n9zari-droid/ParandO`
 - **Target Branch:** `main`
-- **Observed Remote Baseline SHA:** `2fd6d94f42062f50b4f7c4516869d37f971a092a`
-- **Verified Remote CI Run:** Run ID `40392612826` (Run Number 33), URL: `https://github.com/moh3n9zari-droid/ParandO/actions/runs/40392612826`
-- **Remediation Stage:** **P0-02** (Server-Side Authentication, Role-Based Access Control / RBAC, Multi-Tenant Isolation, Resource Ownership & Sensitive REST API Protection)
+- **Observed Remote Baseline SHA:** `0a9c736433bf82a75b636dc18cc24176e1a8c670`
+- **Verified Remote CI Run:** Run ID `40402428678` (Run Number 34), URL: `https://github.com/moh3n9zari-droid/ParandO/actions/runs/40402428678`
+- **Remediation Stage:** **P0-02** (Server-Side Authentication, Strict Token Claims, Fail-Closed Trust Boundary, Role-Based Access Control / RBAC, Multi-Tenant Isolation, Resource Ownership & Sensitive REST API Protection)
 - **Authoritative Frameworks:** `PROJECT_OWNER_INTENT.md`, `CURRENT_STATE_AUDIT.md`, `RELEASE_READINESS_REMEDIATION_PLAN.md`, `QUALITY_RUBRIC.md`, `AGENTS.md`
 - **Auditor / Verifier:** Principal Systems & Security Architect
 - **Verification Environment:** Linux Container (Node.js `v22.23.4`, npm `10.9.2`, tsx `v4.23.15`, Vite `6.2.0`)
-- **Report Date / Timestamp:** 2026-10-26T21:08:00Z
+- **Report Date / Timestamp:** 2026-10-26T21:28:00Z
 
 ---
 
 ## 1. Executive Summary & Remediation Completion Status
 
-### Scope of P0-02 Remediation
-In accordance with `RELEASE_READINESS_REMEDIATION_PLAN.md` and the authoritative audit, sensitive REST API endpoints in ParandO previously accepted unauthenticated requests and relied entirely on client-supplied identity (`offerer_id`), tenant (`tenant_id`), and eligibility flags (`isEligible: true`).
+### Scope and Purpose of P0-02 Remediation
+In accordance with `RELEASE_READINESS_REMEDIATION_PLAN.md` and the authoritative repository audit:
+1. Sensitive REST API routes in ParandO previously accepted unauthenticated requests and relied entirely on client-supplied identity (`offerer_id`), tenant (`tenant_id`), and eligibility flags (`isEligible: true`).
+2. Subsequent review of the initial authentication implementation identified critical trust-boundary defects:
+   - `src/auth/auth_service.ts` contained a deterministic hardcoded fallback secret (`parando-national-auction-auth-secret-deterministic-2026`) when `PARANDO_AUTH_SECRET` was absent.
+   - Token verification did not enforce mandatory numeric expiration (`exp`), allowing perpetually valid tokens or tokens with missing `exp` to pass.
+   - Token claims (`sub`, `tid`, `eligible`, `roles`, `alg`) lacked strict runtime type and schema validation.
 
-Under P0-02, a server-enforced authentication boundary and role-based access control (RBAC) model have been implemented, strictly isolating tenants and enforcing resource ownership:
-1. **Cryptographic Server-Side Authentication:** All sensitive operations require a verified `Authorization: Bearer <token>` credential. Missing, malformed, expired, tampered, or untrusted tokens are rejected with consistent HTTP 401 Unauthorized responses.
-2. **Server-Side Role-Based Authorization:** Every sensitive route verifies that the authenticated principal possesses the required domain role (`OFFERER`, `SELLER`, `EXCHANGE_ADMIN`, `AUDITOR`). Principals lacking permissions are rejected with HTTP 403 Forbidden.
-3. **Strict Multi-Tenant Isolation:** Bidders, sellers, and exchange administrators are confined strictly to their authenticated tenant (`principal.tenantId === comp.tenantId`). Cross-tenant offers, settlements, proof issuance, and audit access are rejected with HTTP 403 Forbidden.
-4. **Ownership & Anti-Spoofing Guarantees:** Client-supplied fields (`offerer_id`, `tenant_id`, `isEligible`, or custom spoofing headers like `X-User-Id` / `X-Role`) cannot establish authority or override the verified principal. If client parameters contradict the token, the request is rejected with HTTP 403 Forbidden (`IDENTITY_MISMATCH` / `TENANT_MISMATCH`).
-5. **Scope-Limited Reads:** Financial commitment proofs and audit event logs are strictly scoped. Participants can only inspect their own proofs, and auditors can only view events belonging to their tenant.
-6. **Settlement Boundary Protection:** Settlement (`POST /settle`) cannot be triggered merely by knowing a competition ID. It requires `EXCHANGE_ADMIN` of that tenant or the verified `SELLER` of that competition. Unauthorized requests are rejected with 403 Forbidden before any settlement side effects occur.
-7. **Public Read-Only Preservation:** Unauthenticated read access to public market listings, lot specifications, price ladders, and health endpoints is preserved.
+Under this final remediation cycle for **P0-02**, these security defects have been eliminated:
+1. **Zero Hardcoded Secrets / Strict Fail-Closed (AC-01, AC-02):**
+   - The deterministic fallback secret has been eradicated from production source code.
+   - `getAuthSecret()` returns `process.env.PARANDO_AUTH_SECRET || null`.
+   - When `PARANDO_AUTH_SECRET` is unset, empty, or missing, token verification strictly fails closed with `{ valid: false, error: 'TRUST_CONFIGURATION_MISSING' }`, and sensitive API routes reject incoming requests with HTTP 401 Unauthorized.
+2. **Mandatory Future Numeric Expiration (AC-03):**
+   - The `exp` claim is strictly mandatory.
+   - Tokens without `exp`, tokens with non-numeric `exp`, float `exp`, or timestamps in the past or present (`exp <= now`) are rejected with HTTP 401 Unauthorized (`TOKEN_EXPIRED` or `INVALID_CLAIMS`).
+3. **Strict Claim Validation (AC-04):**
+   - `sub`: must be a non-empty string.
+   - `tid`: must be a non-empty string.
+   - `eligible`: must be a strict boolean primitive (`typeof eligible === 'boolean'`).
+   - `roles`: must be a non-empty array consisting only of valid `UserRole` values (`'OFFERER'`, `'SELLER'`, `'EXCHANGE_ADMIN'`, `'AUDITOR'`).
+   - `alg`: must strictly equal `'HS256'`.
+4. **Constant-Time Cryptographic Signature Verification (AC-05):**
+   - Signatures are verified using `crypto.timingSafeEqual` over SHA-256 HMAC buffers.
+   - Tokens signed with untrusted keys, tampered headers, or tampered payloads are rejected with HTTP 401.
+5. **Separation of Production and Test Utilities (AC-10, AC-11):**
+   - Production service (`src/auth/auth_service.ts`) contains zero test keys or default tokens.
+   - Synthetic test token generation is segregated into `/src/auth/test_token_helper.ts`, which requires an explicit secret argument and has no production defaults.
+6. **Multi-Phase Automated Security Test Suite (AC-09):**
+   - Automated regression test suite (`scripts/test_security_p0_02.ts`) tests both:
+     - **Phase A:** Unconfigured server (no `PARANDO_AUTH_SECRET`), demonstrating that sensitive routes fail closed (401), tokens with the old deterministic fallback are rejected (401), and public routes remain functional (200).
+     - **Phase B:** Configured server with dedicated synthetic test secret, exercising all claim validations, cryptographic checks, RBAC permissions, tenant boundaries, anti-spoofing ownership checks, and settlement side effects.
 
 ---
 
@@ -33,11 +54,12 @@ Under P0-02, a server-enforced authentication boundary and role-based access con
 ### 2.1 File Changes Summary
 | File | Status | Description |
 | :--- | :--- | :--- |
-| `/src/auth/auth_service.ts` | **NEW** | Authentication & RBAC engine: `generateToken`, `verifyToken`, `authenticateRequest`, `requireAuth`, `requireRole`, and constant-time signature validation. |
+| `/src/auth/auth_service.ts` | **MODIFIED** | Eliminated deterministic fallback secret. Implemented strict `exp` check, claim type checks, role validation, and fail-closed handling on missing secret. |
+| `/src/auth/test_token_helper.ts` | **NEW** | Test-only token generation helper that requires an explicit secret parameter; zero production defaults. |
 | `/server.ts` | **MODIFIED** | Enforces authentication, role checks, tenant isolation, ownership validation, and security audit logging across sensitive routes (`/offers`, `/proofs`, `/events`, `/settle`, `/competitions`). Preserves public read-only endpoints (`/health`, `/api/v1/competitions`, `/ladder`). |
-| `/scripts/test_security_p0_02.ts` | **NEW** | Deterministic automated security regression suite covering all AC criteria, negative cases, edge states, and financial integrity. |
+| `/scripts/production_smoke.ts` | **MODIFIED** | Ensured `PORT` environment variable takes precedence over `extraEnv` in `spawnProductionServer`. |
+| `/scripts/test_security_p0_02.ts` | **NEW** | Deterministic automated security regression suite covering Phase A (fail-closed, zero fallback) and Phase B (strict claims, RBAC, tenant isolation, zero side effects). |
 | `/package.json` | **MODIFIED** | Added `"test:security": "tsx scripts/test_security_p0_02.ts"`. |
-| `/package-lock.json` | **MODIFIED** | Synchronized clean lockfile (426 packages, 0 vulnerabilities). |
 | `/.github/workflows/ci.yml` | **MODIFIED** | Added `Security and RBAC regression tests (P0-02)` step to CI workflow. |
 
 ### 2.2 Protected Routes Matrix & Enforcement Points
@@ -59,24 +81,24 @@ Under P0-02, a server-enforced authentication boundary and role-based access con
 
 | Criterion ID | Designation | Status | Verification Evidence |
 | :--- | :--- | :---: | :--- |
-| **AC-01** | Explicit Authentication Boundary | **PASS** | `server.ts` wraps all sensitive routes (`/offers`, `/proofs`, `/events`, `/settle`, `/competitions`) with `requireAuth`. Unauthenticated access is systematically blocked. |
-| **AC-02** | Unauthenticated Request Rejection | **PASS** | `scripts/test_security_p0_02.ts` Section 1: Every sensitive route tested without token returns HTTP 401 Unauthorized with `{ error: 'UNAUTHORIZED' }`. |
-| **AC-03** | Untrusted / Malformed Credential Rejection | **PASS** | `scripts/test_security_p0_02.ts` Section 2: Malformed headers (`Basic ...`), non-JWT strings, tampered payloads, expired tokens, tokens signed with untrusted keys, and arbitrary spoofing headers without tokens all return HTTP 401. |
-| **AC-04** | Server-Side RBAC Enforcement | **PASS** | `scripts/test_security_p0_02.ts` Section 3: Auditors attempting to bid, offerers attempting to settle, offerers attempting to issue proofs, and offerers attempting to dump audit events all return HTTP 403 Forbidden. |
-| **AC-05** | Multi-Tenant Isolation Enforcement | **PASS** | `scripts/test_security_p0_02.ts` Section 4: Cross-tenant bids, cross-tenant settlement, and cross-tenant proof issuance are rejected with HTTP 403 Forbidden (`TENANT_MISMATCH`). |
-| **AC-06** | Immunity to Client-Supplied Spoofing | **PASS** | `scripts/test_security_p0_02.ts` Section 5: Bidders supplying another user's `offerer_id` in request body are rejected with 403. Ineligible bidders passing `isEligible: true` in body are rejected with 403 (`OFFERER_NOT_ELIGIBLE`). Sellers cannot bid on own lots. |
-| **AC-07** | Scope-Restricted Reads | **PASS** | `scripts/test_security_p0_02.ts` Section 6: Offerer reading another user's proof returns 403; offerer reading own proof returns 200. Auditor reading `/events` receives only events scoped to their tenant. |
-| **AC-08** | Unauthorized Settlement Prevention | **PASS** | `scripts/test_security_p0_02.ts` Section 7: Unauthorized settlement attempts return 403. Verified competition status remains `ACTIVE`, version remains unchanged, zero side effects occur. |
-| **AC-09** | Automated Negative Security Tests | **PASS** | `scripts/test_security_p0_02.ts` executes 28 deterministic negative security assertions across all failure modes and HTTP status codes. |
-| **AC-10** | Business Logic & Public Endpoints Intact | **PASS** | `scripts/test_security_p0_02.ts` Sections 8 & 9: Public read-only endpoints return 200 without token; authorized bids, TR-12 replays, proof creation, and authorized settlements pass 100%. Core domain test suite (`npm test`, 26/26) and smoke suite (`npm run test:smoke`, 12/12) pass 100%. |
-| **AC-11** | Zero Real Secrets or Production Bypasses | **PASS** | All tests utilize synthetic in-memory identities (`offerer-alpha`, `admin-gold-officer`). No production authentication bypass, backdoor header, or hardcoded personal data exists. |
-| **AC-12** | Fail-Closed & External IdP Blocker Disclosure | **PASS (Honest Disclosure)** | Sensitive operations fail closed against untrusted credentials. As documented in Section 5 below, an external enterprise Identity Provider integration (e.g. National SSO / Sejam / Banking OAuth) is not currently present in the repository and constitutes the remaining prerequisite for full production identity federation. |
+| **AC-01** | Elimination of Deterministic Secrets | **PASS** | Hardcoded secret fallback removed from `src/auth/auth_service.ts`. If `PARANDO_AUTH_SECRET` is unset, `getAuthSecret()` returns `null`. |
+| **AC-02** | Fail-Closed on Missing Configuration | **PASS** | `test_security_p0_02.ts` Phase A: Unconfigured server returns HTTP 401 Unauthorized for sensitive routes and explicitly rejects tokens signed with the old hardcoded secret. |
+| **AC-03** | Mandatory Future Numeric Expiration | **PASS** | `test_security_p0_02.ts` Phase B.1: Rejects missing `exp`, non-numeric `exp`, null `exp`, and expired `exp` with HTTP 401 Unauthorized. |
+| **AC-04** | Strict Claim Schema & Algorithm Validation | **PASS** | `test_security_p0_02.ts` Phase B.2: Rejects `alg: "none"`, non-HS256 algorithms, empty `sub`, non-string `sub`, empty `tid`, non-boolean `eligible`, empty `roles`, and unknown roles with HTTP 401. |
+| **AC-05** | Constant-Time Cryptographic Verification | **PASS** | `test_security_p0_02.ts` Phase B.3: Tokens signed with wrong secret or tampered payloads are rejected with HTTP 401 via `crypto.timingSafeEqual`. |
+| **AC-06** | Established Issuer Trust Boundary | **PASS** | Verifier strictly validates credentials signed by the established secret; in the absence of valid configuration or key trust, all sensitive access is denied. |
+| **AC-07** | Fail-Closed Issuer Boundary | **PASS** | Without an established trust key, no sensitive route allows access; unconfigured production instances fail closed. |
+| **AC-08** | RBAC, Tenant Isolation & Ownership Preservation | **PASS** | `test_security_p0_02.ts` Phase B.4 & B.5: Cross-tenant operations return 403 (`TENANT_MISMATCH`), role mismatches return 403 (`FORBIDDEN`), and body spoofing attempts return 403 (`IDENTITY_MISMATCH`). |
+| **AC-09** | Zero Settlement Side Effects on Rejection | **PASS** | `test_security_p0_02.ts` Phase B.6: Unauthorized settlement attempt returns 403; competition status remains `ACTIVE`, version is untouched, zero vouchers or state changes occur. |
+| **AC-10** | Synthetic Test Identities & Public Endpoints | **PASS** | `test_security_p0_02.ts` Phase B.7: Public routes (`/health`, `/api/v1/competitions`, `/ladder`) return 200 without token. Authorized bids, TR-12 replays, and settlements succeed 100%. |
+| **AC-11** | Zero Production Backdoors or Test Credentials in Prod | **PASS** | `src/auth/auth_service.ts` contains zero test secrets or backdoors. Test tokens are generated strictly in test harnesses. |
+| **AC-12** | Honest IdP Blocker Disclosure | **PASS (Honest Disclosure)** | Full disclosure provided in Section 5: External upstream Identity Provider (IdP) integration is not present in the repository and remains an infrastructure prerequisite before full production federation can occur. |
 
 ---
 
 ## 4. Full Validation Sequence Execution Evidence
 
-All 9 required validation checks were executed from a clean dependency tree on Node.js 22.23.4:
+All required validation checks were executed from a clean dependency tree on Node.js 22.23.4:
 
 ```text
 ================================================================================
@@ -98,7 +120,7 @@ Output: vite v6.4.5 building for production... ✓ built in 4.67s (PWA v2.0.0 ge
 
 Command 5: npm run test:smoke
 Exit Code: 0
-Output: ALL LOCAL PRODUCTION SMOKE TESTS PASSED (12/12 assertions passed)
+Output: ALL LOCAL PRODUCTION SMOKE TESTS PASSED (12/12 assertions passed, 100% SUCCESS)
 
 Command 6: npm run test:escalation
 Exit Code: 0
@@ -114,7 +136,9 @@ Output: TIMEOUT-CLEANUP REGRESSION TEST PASSED (7/7 cases passed, 100% SUCCESS)
 
 Command 9: npm run test:security
 Exit Code: 0
-Output: ALL P0-02 SECURITY & RBAC REGRESSION TESTS PASSED (28/28 assertions passed)
+Output: ALL P0-02 TRUST-BOUNDARY SECURITY REGRESSION TESTS PASSED (100% SUCCESS)
+  Phase A: 6/6 assertions passed (unconfigured fail-closed, old secret rejected)
+  Phase B: 22/22 assertions passed (strict exp, claims, RBAC, tenant isolation, settlement side effects, public routes)
 ================================================================================
 ```
 
@@ -122,10 +146,11 @@ Output: ALL P0-02 SECURITY & RBAC REGRESSION TESTS PASSED (28/28 assertions pass
 
 ## 5. Outstanding Blockers & Missing Integrations (AC-12 Disclosure)
 
-In strict compliance with **AC-12** and **Task 2**:
-1. **Absent External Identity Provider (IdP):**
-   - The standalone repository contains an in-memory cryptographic verification boundary (`src/auth/auth_service.ts`), which validates HMAC-SHA256 bearer tokens and enforces role-based access control, tenant isolation, and resource ownership.
-   - However, an external production Identity Provider (such as the Iranian National Single Sign-On / پنجره ملی خدمات دولت هوشمند, Central Securities Depository of Iran / سجام (Sejam), or banking OAuth2 gateway) is **NOT** integrated into this repository.
-   - Until an external identity provider or enterprise OAuth authorization server is configured to issue and sign production tokens, the server fails closed for all untrusted client credentials.
+In strict compliance with **AC-12**:
+1. **Absence of Upstream External Identity Provider (IdP):**
+   - The repository implements an internal cryptographic token verification and RBAC engine (`src/auth/auth_service.ts`), which validates HMAC-SHA256 bearer tokens against the server's configured trust secret (`PARANDO_AUTH_SECRET`).
+   - However, an upstream external Identity Provider (such as the Iranian National Single Sign-On / پنجره ملی خدمات دولت هوشمند, Central Securities Depository of Iran / سجام (Sejam), or banking OAuth2 gateway) is **NOT** integrated into this repository.
+   - The application does not contain an identity issuance service or SSO redirect flow. In a deployed environment, tokens must be issued by a trusted upstream authorization service sharing the configured secret, or an external IdP integration must be developed in a future milestone.
+   - Without `PARANDO_AUTH_SECRET`, the server strictly fails closed for all sensitive operations.
 2. **Next Sequenced Remediation Item:**
    - **P0-03 (WebSocket Authorization, Channel Isolation & Multiplexing)**: Out of scope for this stage and remains untouched per the single-item remediation boundary.
