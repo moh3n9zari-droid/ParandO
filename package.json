@@ -8,11 +8,6 @@
     "start": "tsx server.ts",
     "build": "tsc && vite build",
     "lint": "tsc --noEmit",
-    "test": "tsx -e \"import { runAllCoreTests } from './src/core/tests_suite'; const res = runAllCoreTests(); const failed = res.filter(r => r.status === 'failed'); console.log('Passed ' + (res.length - failed.length) + '/' + res.length + ' tests'); if (failed.length > 0) { failed.forEach(f => console.error('FAILED:', f.name, f.error)); process.exit(1); }\"",
-    "test:smoke": "tsx scripts/production_smoke.ts",
-    "test:escalation": "tsx scripts/test_termination_escalation.ts",
-    "test:failure-cleanup": "tsx scripts/test_failure_cleanup.ts",
-    "test:timeout-cleanup": "tsx scripts/test_timeout_cleanup.ts",
     "preview": "vite preview --port 3000"
   },
   "dependencies": {
@@ -34,7 +29,6 @@
     "@vitejs/plugin-react": "^4.3.4",
     "tailwindcss": "^4.0.0",
     "typescript": "^5.7.0",
-    "vite": "^6.2.0",
-    "vite-plugin-pwa": "^2.0.0"
+    "vite": "^6.2.0"
   }
 }

@@ -1,64 +1,23 @@
 @import "tailwindcss";
 
 @layer base {
-  :root {
-    color-scheme: light dark;
-    --parando-orange: #FF5000;
-    --parando-orange-hover: #E64A00;
-    --parando-charcoal: #121212;
-    --parando-surface-dark: #1E1E24;
-    --parando-bg-light: #F7F7FA;
-    --parando-green: #00A86B;
-    --parando-red: #D32F2F;
-  }
-
-  body {
-    font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    font-feature-settings: "tnum" 1, "ss01" 1;
-    direction: rtl;
-    text-align: right;
+  * {
+    border-color: rgba(255, 255, 255, 0.1);
   }
 }
 
-/* Tabular figures for timers, currency and sequences */
-.tabular-nums, .font-tnum {
-  font-variant-numeric: tabular-nums;
-  font-feature-settings: "tnum" 1;
-}
-
-/* Keyframe for live price flash / ladder jump */
-@keyframes price-pulse {
-  0% { transform: scale(1); background-color: rgba(255, 80, 0, 0.25); }
-  50% { transform: scale(1.02); background-color: rgba(0, 168, 107, 0.2); }
-  100% { transform: scale(1); background-color: transparent; }
-}
-
-.animate-price-pulse {
-  animation: price-pulse 0.6s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-/* Custom scrollbars */
+/* Custom scrollbars for trading terminal feel */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: transparent;
+  background: rgba(15, 23, 42, 0.6);
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(148, 163, 184, 0.4);
-  border-radius: 4px;
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(148, 163, 184, 0.7);
+  background: rgba(148, 163, 184, 0.6);
 }
-
-/* Hide scrollbar for category pills horizontal scroll */
-.scrollbar-none::-webkit-scrollbar {
-  display: none;
-}
-.scrollbar-none {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
