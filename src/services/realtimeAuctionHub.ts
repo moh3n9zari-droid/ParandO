@@ -1,9 +1,14 @@
 /**
  * هاب ارتباطی زنده وب‌سوکت و رویدادهای آنی پاراندو (ParandO Real-Time WebSocket Hub)
  *
- * تضمین به‌روزرسانی زنده تغییرات نردبان، جابجایی رتبه‌ها، گذار وضعیت‌ها و شمارشگر
- * معکوس زمان حراج در سراسر کلاینت‌ها بدون نیاز به رفرش صفحه.
- * مجهز به همگام‌سازی بین پنجره‌ها (BroadcastChannel) و مدیریت اتصال مجدد هوشمند.
+ * در حالت واقعی (Real Mode):
+ * به وب‌سوکت معتبر سرور بورس (/ws/competitions/:id) متصل شده و رویدادهای رسمی
+ * (ladder.snapshot, ladder.update, ladder.determined, PRESENCE_SYNC) را با توکن احراز هویت
+ * دریافت و تاخیر واقعی رفت‌وبرگشت (RTT) را با PING/PONG پایش می‌کند.
+ *
+ * در حالت نمایشی (Demo Mode):
+ * از مجرای رویدادهای شبیه‌سازی‌شده محلی (BroadcastChannel) استفاده می‌کند و کلیه رویدادها
+ * به عنوان داده آزمایشی برچسب‌گذاری می‌شوند.
  */
 
 import { Offer } from '../core/competition_kernel';
@@ -20,6 +25,8 @@ export interface LadderUpdatePayload {
   readonly rankChanges: readonly RankChange[];
   readonly transitions: readonly StatusTransition[];
   readonly timestamp: number;
+  readonly version?: number;
+  readonly isAuthoritative?: boolean;
 }
 
 export interface ClockTickPayload {
@@ -40,8 +47,8 @@ export type RealTimeEvent =
   | { type: 'OFFER_PLACED'; payload: { offer: Offer; rank: number } }
   | { type: 'STATUS_CHANGED'; payload: { competitionId: string; newStatus: string } }
   | { type: 'COUNTDOWN_TICK'; payload: ClockTickPayload }
-  | { type: 'PRESENCE_SYNC'; payload: { activeTradersCount: number; traders: TraderPresence[] } }
-  | { type: 'LADDER_DETERMINED'; payload: { event: LadderDeterminedEvent; statement?: SettlementStatement } };
+  | { type: 'PRESENCE_SYNC'; payload: { activeTradersCount: number; traders?: TraderPresence[]; competitionId?: string } }
+  | { type: 'LADDER_DETERMINED'; payload: { event: LadderDeterminedEvent; statement?: SettlementStatement; voucher?: any } };
 
 type EventCallback = (event: RealTimeEvent) => void;
 type StatusCallback = (status: WebSocketConnectionStatus, latencyMs: number) => void;
@@ -50,17 +57,24 @@ const BROADCAST_CHANNEL_NAME = 'parando_auction_ws_channel';
 
 export class RealTimeAuctionHub {
   private static instance: RealTimeAuctionHub;
-  private status: WebSocketConnectionStatus = 'CONNECTED';
-  private latencyMs: number = 24; // پینگ میانگین شبکه ملی (ms)
+  private status: WebSocketConnectionStatus = 'DISCONNECTED';
+  private latencyMs: number = 0;
   private subscribers: Set<EventCallback> = new Set();
   private statusSubscribers: Set<StatusCallback> = new Set();
   private broadcastChannel: BroadcastChannel | null = null;
-  private pingInterval: any = null;
+  private demoInterval: any = null;
+  private realPingInterval: any = null;
   private messagesCount: number = 0;
+
+  // Real Mode WebSocket state
+  private activeWs: any = null;
+  private currentCompetitionId: string | null = null;
+  private activeToken: string | null = null;
+  private isReal: boolean = false;
+  private pingTimestamp: number = 0;
 
   private constructor() {
     this.initBroadcastChannel();
-    this.startHeartbeat();
   }
 
   public static getInstance(): RealTimeAuctionHub {
@@ -75,7 +89,7 @@ export class RealTimeAuctionHub {
       try {
         this.broadcastChannel = new BroadcastChannel(BROADCAST_CHANNEL_NAME);
         this.broadcastChannel.onmessage = (ev) => {
-          if (ev.data && ev.data.type) {
+          if (!this.isReal && ev.data && ev.data.type) {
             this.notifyLocalSubscribers(ev.data, false);
           }
         };
@@ -85,15 +99,8 @@ export class RealTimeAuctionHub {
     }
   }
 
-  private startHeartbeat() {
-    if (typeof window === 'undefined') return;
-    this.pingInterval = setInterval(() => {
-      if (this.status === 'CONNECTED') {
-        // نوسان طبیعی پینگ شبکه ملی (۱۸ تا ۳۲ میلی‌ثانیه)
-        this.latencyMs = Math.floor(18 + Math.random() * 15);
-        this.notifyStatus();
-      }
-    }, 4000);
+  public isRealConnection(): boolean {
+    return this.isReal && this.status === 'CONNECTED';
   }
 
   public getStatus(): WebSocketConnectionStatus {
@@ -144,7 +151,7 @@ export class RealTimeAuctionHub {
       }
     });
 
-    if (broadcast && this.broadcastChannel) {
+    if (broadcast && !this.isReal && this.broadcastChannel) {
       try {
         this.broadcastChannel.postMessage(event);
       } catch (err) {
@@ -153,29 +160,304 @@ export class RealTimeAuctionHub {
     }
   }
 
-  /**
-   * انتشار رویداد به‌روزرسانی نردبان (Ladder Update)
-   */
+  // ---------------------------------------------------------------------------
+  // Real Mode Authoritative WebSocket Connection
+  // ---------------------------------------------------------------------------
+
+  public connectReal(competitionId: string, token: string): void {
+    if (typeof window === 'undefined') return;
+
+    // If already connected to same competition with same token, keep active
+    if (
+      this.isReal &&
+      this.activeWs &&
+      this.activeWs.readyState === 1 &&
+      this.currentCompetitionId === competitionId &&
+      this.activeToken === token
+    ) {
+      return;
+    }
+
+    this.disconnectReal();
+    this.isReal = true;
+    this.currentCompetitionId = competitionId;
+    this.activeToken = token;
+    this.setStatus('CONNECTING');
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${protocol}//${window.location.host}/ws/competitions/${competitionId}`;
+
+    try {
+      // Browser standard WebSocket subprotocol authentication (AC-07, SAFE_WS_SUBPROTOCOLS)
+      const ws = new WebSocket(wsUrl, ['parando-v1', 'bearer.' + token]);
+      this.activeWs = ws;
+
+      ws.onopen = () => {
+        if (this.activeWs !== ws) return;
+        this.status = 'CONNECTED';
+        this.latencyMs = 20; // Initial baseline
+        this.notifyStatus();
+        this.startRealHeartbeat();
+      };
+
+      ws.onmessage = (event) => {
+        if (this.activeWs !== ws) return;
+        try {
+          if (event.data === 'pong') {
+            if (this.pingTimestamp > 0) {
+              this.latencyMs = Math.max(1, Math.round(performance.now() - this.pingTimestamp));
+              this.notifyStatus();
+            }
+            return;
+          }
+
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'PONG') {
+            if (this.pingTimestamp > 0) {
+              this.latencyMs = Math.max(1, Math.round(performance.now() - this.pingTimestamp));
+              this.notifyStatus();
+            }
+            return;
+          }
+
+          if (data.type === 'ladder.snapshot') {
+            const ladderOffers: Offer[] = (data.ladder || []).map((o: any) => ({
+              offerId: o.offer_id,
+              competitionId: o.competition_id || competitionId,
+              offererId: o.offerer_id,
+              amount: o.amount,
+              placedAt: new Date(o.placed_at || Date.now()),
+              sequence: o.sequence || 1,
+              idempotencyKey: o.idempotency_key || `srv-${o.offer_id}`,
+            }));
+
+            const highestOffer: Offer | null = data.highest_offer
+              ? {
+                  offerId: data.highest_offer.offer_id,
+                  competitionId: data.highest_offer.competition_id || competitionId,
+                  offererId: data.highest_offer.offerer_id,
+                  amount: data.highest_offer.amount,
+                  placedAt: new Date(data.highest_offer.placed_at || Date.now()),
+                  sequence: data.highest_offer.sequence || 1,
+                  idempotencyKey: data.highest_offer.idempotency_key || `srv-${data.highest_offer.offer_id}`,
+                }
+              : null;
+
+            this.notifyLocalSubscribers(
+              {
+                type: 'LADDER_UPDATED',
+                payload: {
+                  competitionId,
+                  ladder: ladderOffers,
+                  highestOffer,
+                  offerCount: ladderOffers.length,
+                  rankChanges: [],
+                  transitions: [],
+                  timestamp: Date.now(),
+                  version: data.version,
+                  isAuthoritative: true,
+                },
+              },
+              false
+            );
+          } else if (data.type === 'ladder.update') {
+            const ladderOffers: Offer[] = (data.ladder || []).map((o: any) => ({
+              offerId: o.offer_id,
+              competitionId: o.competition_id || competitionId,
+              offererId: o.offerer_id,
+              amount: o.amount,
+              placedAt: new Date(o.placed_at || Date.now()),
+              sequence: o.sequence || 1,
+              idempotencyKey: o.idempotency_key || `srv-${o.offer_id}`,
+            }));
+
+            const highestOffer: Offer | null = data.highest_offer
+              ? {
+                  offerId: data.highest_offer.offer_id,
+                  competitionId: data.highest_offer.competition_id || competitionId,
+                  offererId: data.highest_offer.offerer_id,
+                  amount: data.highest_offer.amount,
+                  placedAt: new Date(data.highest_offer.placed_at || Date.now()),
+                  sequence: data.highest_offer.sequence || 1,
+                  idempotencyKey: data.highest_offer.idempotency_key || `srv-${data.highest_offer.offer_id}`,
+                }
+              : null;
+
+            this.notifyLocalSubscribers(
+              {
+                type: 'LADDER_UPDATED',
+                payload: {
+                  competitionId,
+                  ladder: ladderOffers,
+                  highestOffer,
+                  offerCount: ladderOffers.length,
+                  rankChanges: [],
+                  transitions: [],
+                  timestamp: Date.now(),
+                  version: data.version,
+                  isAuthoritative: true,
+                },
+              },
+              false
+            );
+          } else if (data.type === 'ladder.determined') {
+            this.notifyLocalSubscribers(
+              {
+                type: 'LADDER_DETERMINED',
+                payload: {
+                  event: {
+                    eventId: data.event_id || `det-${Date.now()}`,
+                    eventType: 'ladder.determined',
+                    eventName: 'ladder.determined',
+                    competitionId: data.competition_id || competitionId,
+                    tenantId: data.tenant_id || 'ir-gov-tehran-01',
+                    sellerId: data.seller_id || 'seller-central',
+                    determinedAt: new Date(data.settled_at || Date.now()),
+                    finalLadder: (data.ladder || []) as readonly Offer[],
+                    winnerOffer: data.winner_id
+                      ? ({
+                          offerId: `off-win-${data.winner_id}`,
+                          competitionId: data.competition_id || competitionId,
+                          offerer: { offererId: data.winner_id, tenantId: data.tenant_id || 'ir-gov-tehran-01' },
+                          amount: data.clearing_price || 0,
+                          createdAt: new Date(data.settled_at || Date.now()),
+                          rank: 1,
+                        } as any)
+                      : null,
+                    totalOfferCount: data.total_offer_count || 0,
+                    basePrice: data.base_price || 0,
+                    sealDigest: data.voucher_id || 'server-sealed',
+                  },
+                  statement: data.statement,
+                  voucher: data.voucher,
+                },
+              },
+              false
+            );
+          } else if (data.type === 'PRESENCE_SYNC') {
+            this.notifyLocalSubscribers(
+              {
+                type: 'PRESENCE_SYNC',
+                payload: {
+                  activeTradersCount: data.count || 1,
+                  competitionId: data.competition_id,
+                },
+              },
+              false
+            );
+          }
+        } catch (err) {
+          console.warn('Error parsing WebSocket message', err);
+        }
+      };
+
+      ws.onerror = () => {
+        if (this.activeWs !== ws) return;
+        this.status = 'DISCONNECTED';
+        this.latencyMs = 0;
+        this.notifyStatus();
+      };
+
+      ws.onclose = () => {
+        if (this.activeWs !== ws) return;
+        this.stopRealHeartbeat();
+        this.status = 'DISCONNECTED';
+        this.latencyMs = 0;
+        this.notifyStatus();
+      };
+    } catch {
+      this.status = 'DISCONNECTED';
+      this.latencyMs = 0;
+      this.notifyStatus();
+    }
+  }
+
+  public disconnectReal(): void {
+    this.stopRealHeartbeat();
+    if (this.activeWs) {
+      try {
+        this.activeWs.close();
+      } catch {}
+      this.activeWs = null;
+    }
+    this.isReal = false;
+    this.currentCompetitionId = null;
+    this.activeToken = null;
+    this.status = 'DISCONNECTED';
+    this.latencyMs = 0;
+    this.notifyStatus();
+  }
+
+  private startRealHeartbeat(): void {
+    this.stopRealHeartbeat();
+    this.realPingInterval = setInterval(() => {
+      if (this.activeWs && this.activeWs.readyState === 1) {
+        this.pingTimestamp = performance.now();
+        try {
+          this.activeWs.send(JSON.stringify({ type: 'PING', id: Date.now().toString() }));
+        } catch {
+          this.status = 'DISCONNECTED';
+          this.notifyStatus();
+        }
+      }
+    }, 4000);
+  }
+
+  private stopRealHeartbeat(): void {
+    if (this.realPingInterval) {
+      clearInterval(this.realPingInterval);
+      this.realPingInterval = null;
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Demo Mode Simulation Methods (Explicitly demarcated as Demo/Simulated)
+  // ---------------------------------------------------------------------------
+
+  public initDemoMode(): void {
+    this.disconnectReal();
+    this.isReal = false;
+    this.status = 'CONNECTED';
+    this.latencyMs = 24; // Simulated baseline for Demo mode
+    this.notifyStatus();
+    this.startDemoHeartbeat();
+  }
+
+  private startDemoHeartbeat() {
+    if (typeof window === 'undefined') return;
+    this.stopDemoHeartbeat();
+    this.demoInterval = setInterval(() => {
+      if (!this.isReal && this.status === 'CONNECTED') {
+        this.latencyMs = Math.floor(18 + Math.random() * 15);
+        this.notifyStatus();
+      }
+    }, 4000);
+  }
+
+  private stopDemoHeartbeat() {
+    if (this.demoInterval) {
+      clearInterval(this.demoInterval);
+      this.demoInterval = null;
+    }
+  }
+
   public broadcastLadderUpdate(payload: LadderUpdatePayload) {
+    if (this.isReal) return; // In Real mode, only server messages update ladder
     this.notifyLocalSubscribers({
       type: 'LADDER_UPDATED',
-      payload,
+      payload: { ...payload, isAuthoritative: false },
     });
   }
 
-  /**
-   * انتشار رویداد ورود پیشنهاد جدید
-   */
   public broadcastOfferPlaced(offer: Offer, rank: number) {
+    if (this.isReal) return;
     this.notifyLocalSubscribers({
       type: 'OFFER_PLACED',
       payload: { offer, rank },
     });
   }
 
-  /**
-   * انتشار تیک شمارشگر معکوس و زمان سرور
-   */
   public broadcastTick(serverTime: number, remainingSeconds: number, isExpired: boolean) {
     this.notifyLocalSubscribers({
       type: 'COUNTDOWN_TICK',
@@ -183,36 +465,26 @@ export class RealTimeAuctionHub {
     });
   }
 
-  /**
-   * انتشار تغییر وضعیت حراج (مثلاً بسته شدن، تعلیق)
-   */
   public broadcastStatusChanged(competitionId: string, newStatus: string) {
+    if (this.isReal) return;
     this.notifyLocalSubscribers({
       type: 'STATUS_CHANGED',
       payload: { competitionId, newStatus },
     });
   }
 
-  /**
-   * انتشار رویداد پایان حراج و تعیین نتیجه نهایی (ADR-003 ladder.determined)
-   */
   public broadcastLadderDetermined(event: LadderDeterminedEvent, statement?: SettlementStatement) {
+    if (this.isReal) return;
     this.notifyLocalSubscribers({
       type: 'LADDER_DETERMINED',
       payload: { event, statement },
     });
   }
 
-  /**
-   * شبیه‌سازی قطع اتصال وب‌سوکت برای تست تاب‌آوری
-   */
   public simulateDisconnect() {
     this.setStatus('DISCONNECTED');
   }
 
-  /**
-   * شبیه‌سازی اتصال مجدد با هندشیک وب‌سوکت
-   */
   public simulateReconnect() {
     this.setStatus('RECONNECTING');
     setTimeout(() => {

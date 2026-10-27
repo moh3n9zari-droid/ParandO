@@ -22,11 +22,15 @@ import {
   Layers,
   Sparkles,
   SlidersHorizontal,
+  AlertTriangle,
 } from 'lucide-react';
 import { PWAInstallButton } from './PWAInstallButton';
 import { formatDualCurrency, toPersianDigits } from '../utils/formatters';
 
 export interface TopHeaderProps {
+  appMode?: 'real' | 'demo';
+  onToggleMode?: (mode: 'real' | 'demo') => void;
+  realWsStatus?: 'CONNECTED' | 'CONNECTING' | 'RECONNECTING' | 'DISCONNECTED';
   searchQuery: string;
   onSearchChange: (q: string) => void;
   selectedCategory: string;
@@ -58,6 +62,9 @@ export const CATEGORIES = [
 ];
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
+  appMode = 'real',
+  onToggleMode,
+  realWsStatus = 'CONNECTED',
   searchQuery,
   onSearchChange,
   selectedCategory,
@@ -86,35 +93,51 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-3">
           {/* Left: National Information Network & Latency */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={onOpenResilienceModal}
-              className={`flex items-center gap-1.5 transition-colors cursor-pointer ${
-                isOnline ? 'text-emerald-400 hover:text-emerald-300' : 'text-amber-400 animate-pulse'
-              }`}
-              title="پایشگر تاب‌آوری شبکه ملی اطلاعات"
-            >
-              {isOnline ? (
-                <>
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block" />
-                  <Wifi className="w-3.5 h-3.5" />
-                  <span className="font-medium">شبکه ملی اطلاعات (NIN): متصل</span>
-                </>
-              ) : (
-                <>
-                  <WifiOff className="w-3.5 h-3.5" />
-                  <span className="font-bold">صف آفلاین ({toPersianDigits(pendingQueueCount)})</span>
-                </>
-              )}
-            </button>
+            {appMode === 'real' ? (
+              <button
+                onClick={onOpenResilienceModal}
+                className={`flex items-center gap-1.5 transition-colors cursor-pointer ${
+                  realWsStatus === 'CONNECTED' ? 'text-emerald-400 hover:text-emerald-300' : 'text-red-400 hover:text-red-300 animate-pulse'
+                }`}
+                title="وضعیت اتصال به هسته بورس"
+              >
+                {realWsStatus === 'CONNECTED' ? (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-ping inline-block" />
+                    <Wifi className="w-3.5 h-3.5" />
+                    <span className="font-medium">هسته بورس: متصل (برخط)</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                    <WifiOff className="w-3.5 h-3.5 text-red-400" />
+                    <span className="font-bold">هسته بورس: قطع ارتباط</span>
+                  </>
+                )}
+              </button>
+            ) : (
+              <div className="flex items-center gap-1.5 text-amber-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 inline-block" />
+                <span className="font-bold">محیط شبیه‌سازی (آزمایشی)</span>
+              </div>
+            )}
 
             <span className="text-white/20">|</span>
 
-            {/* Latency < 30ms */}
+            {/* Latency */}
             <div className="hidden sm:flex items-center gap-1 text-slate-400 font-mono">
               <span>تاخیر وب‌سوکت:</span>
-              <span className={`font-bold ${latencyMs < 30 ? 'text-emerald-400' : 'text-amber-400'}`}>
-                {toPersianDigits(latencyMs)}ms
-              </span>
+              {appMode === 'real' ? (
+                realWsStatus === 'CONNECTED' ? (
+                  <span className={`font-bold ${latencyMs > 0 && latencyMs < 30 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                    {toPersianDigits(latencyMs)}ms
+                  </span>
+                ) : (
+                  <span className="text-red-400 font-bold">قطع</span>
+                )
+              ) : (
+                <span className="text-amber-400 font-bold">شبیه‌سازی: ~{toPersianDigits(latencyMs)}ms</span>
+              )}
             </div>
 
             <span className="hidden sm:inline text-white/20">|</span>
@@ -271,6 +294,23 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
               <span>پنل فروشنده و تسویه</span>
             </button>
 
+            {/* Mode Switcher Button (AC-01, AC-02) */}
+            {onToggleMode && (
+              <button
+                type="button"
+                onClick={() => onToggleMode(appMode === 'real' ? 'demo' : 'real')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
+                  appMode === 'real'
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                    : 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25 ring-1 ring-amber-500/30'
+                }`}
+                title="تغییر حالت کاری سامانه بین بورس واقعی و شبیه‌سازی آزمایشی"
+              >
+                <span className={`w-2 h-2 rounded-full ${appMode === 'real' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                <span>{appMode === 'real' ? 'حالت واقعی بورس' : 'حالت آزمایشی (Demo)'}</span>
+              </button>
+            )}
+
             {/* Theme Toggle */}
             <button
               onClick={onToggleTheme}
@@ -286,6 +326,22 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Demo Mode Prominent Banner (AC-02, AC-08) */}
+      {appMode === 'demo' && (
+        <div className="bg-amber-500/20 border-b border-amber-500/40 text-amber-300 text-xs px-4 py-1.5 text-center font-bold flex items-center justify-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+          <span>حالت آزمایشی (Demo Mode): تمامی داده‌ها، مظنه‌ها و معاملات شبیه‌سازی‌شده هستند و به هسته رسمی بورس ارسال نمی‌شوند.</span>
+          {onToggleMode && (
+            <button
+              onClick={() => onToggleMode('real')}
+              className="underline hover:text-white mr-2 text-[11px] cursor-pointer"
+            >
+              انتقال به حالت واقعی
+            </button>
+          )}
+        </div>
+      )}
 
       {/* 3. Category Navigation Bar (Temu-Style Horizontal Scrolling Pills) */}
       <div

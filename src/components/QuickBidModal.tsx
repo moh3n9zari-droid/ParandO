@@ -18,18 +18,22 @@ import { Offerer, CommitmentProof, Offer } from '../core/competition_kernel';
 import { formatDualCurrency, toPersianDigits } from '../utils/formatters';
 
 export interface QuickBidModalProps {
+  appMode?: 'real' | 'demo';
+  isServerConnected?: boolean;
   isOpen: boolean;
   onClose: () => void;
   module: MarketModuleConfig;
   highestOffer?: Offer | null;
   activeOfferer: Offerer;
   activeProof?: CommitmentProof | null;
-  onSubmitOffer: (amount: number, idempotencyKey?: string) => void;
+  onSubmitOffer: (amount: number, idempotencyKey?: string) => Promise<boolean | void> | void;
   isDarkTheme?: boolean;
   isOnline: boolean;
 }
 
 export const QuickBidModal: React.FC<QuickBidModalProps> = ({
+  appMode = 'real',
+  isServerConnected = true,
   isOpen,
   onClose,
   module,
@@ -69,7 +73,8 @@ export const QuickBidModal: React.FC<QuickBidModalProps> = ({
   const guaranteedAmount = activeProof?.guaranteedAmount || 0;
   const isSolvent = guaranteedAmount >= requiredExposure;
   const isProofValid = activeProof ? activeProof.validUntil.getTime() > Date.now() : false;
-  const canSubmit = isSolvent && isProofValid && bidAmount >= minValidAmount;
+  const isServerBlocked = appMode === 'real' && !isServerConnected;
+  const canSubmit = isSolvent && isProofValid && bidAmount >= minValidAmount && !isServerBlocked;
 
   const handleStepAdd = (multiplier: number) => {
     setBidAmount((prev) => Math.max(minValidAmount, prev + module.minIncrement * multiplier));
@@ -79,16 +84,16 @@ export const QuickBidModal: React.FC<QuickBidModalProps> = ({
     setBidAmount(minValidAmount);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canSubmit) return;
     setIsSubmitting(true);
     try {
-      onSubmitOffer(bidAmount, customKey.trim() || undefined);
-      setTimeout(() => {
-        setIsSubmitting(false);
+      const res = await onSubmitOffer(bidAmount, customKey.trim() || undefined);
+      setIsSubmitting(false);
+      if (res !== false) {
         onClose();
-      }, 350);
+      }
     } catch {
       setIsSubmitting(false);
     }
@@ -139,6 +144,20 @@ export const QuickBidModal: React.FC<QuickBidModalProps> = ({
 
         {/* Modal Scrollable Body */}
         <div className="p-4 sm:p-6 overflow-y-auto space-y-4">
+          {appMode === 'real' && !isServerConnected && (
+            <div className="p-2.5 rounded-xl bg-red-500/15 text-red-500 border border-red-500/30 text-xs font-bold flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>ارتباط با سرور بورس قطع است. تا برقراری مجدد ارتباط، ثبت پیشنهاد مسدود می‌باشد.</span>
+            </div>
+          )}
+
+          {appMode === 'demo' && (
+            <div className="p-2.5 rounded-xl bg-amber-500/15 text-amber-300 border border-amber-500/30 text-xs font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>حالت آزمایشی (Demo Mode): پیشنهاد صرفاً در حافظه محلی ثبت شده و به سرور بورس ارسال نمی‌گردد.</span>
+            </div>
+          )}
+
           {/* Active Offerer & Solvency Chip */}
           <div
             className={`p-3 rounded-xl border flex items-center justify-between text-xs ${

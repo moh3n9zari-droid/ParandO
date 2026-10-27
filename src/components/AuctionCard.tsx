@@ -19,6 +19,7 @@ import { Offer } from '../core/competition_kernel';
 import { formatDualCurrency, formatDuration, toPersianDigits } from '../utils/formatters';
 
 export interface AuctionCardProps {
+  appMode?: 'real' | 'demo';
   module: MarketModuleConfig;
   highestOffer?: Offer | null;
   ladder: readonly Offer[];
@@ -32,6 +33,7 @@ export interface AuctionCardProps {
 }
 
 export const AuctionCard: React.FC<AuctionCardProps> = ({
+  appMode = 'real',
   module,
   highestOffer,
   ladder,
@@ -138,9 +140,20 @@ export const AuctionCard: React.FC<AuctionCardProps> = ({
         <div>
           {/* Category Badge & Seller Score */}
           <div className="flex items-center justify-between text-[11px] mb-1.5">
-            <span className="font-bold text-[#FF5000] truncate max-w-[150px]">
-              {module.badge}
-            </span>
+            <div className="flex items-center gap-1.5 truncate max-w-[190px]">
+              <span className="font-bold text-[#FF5000]">
+                {module.badge}
+              </span>
+              {appMode === 'demo' ? (
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-500 border border-amber-500/30">
+                  شبیه‌سازی
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
+                  مظنه بورس
+                </span>
+              )}
+            </div>
 
             {/* Seller Reputation Score */}
             <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 font-mono text-[10px]">

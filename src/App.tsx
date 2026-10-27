@@ -30,6 +30,7 @@ import { TestRunnerModal } from './components/TestRunnerModal';
 import { ArchitectureInfoModal } from './components/ArchitectureInfoModal';
 import { NetworkResilienceModal } from './components/NetworkResilienceModal';
 import { OfflineResilienceManager, ResilientOffer } from './services/resilienceQueue';
+import { RealTimeAuctionHub, WebSocketConnectionStatus } from './services/realtimeAuctionHub';
 import { formatDualCurrency, formatDuration, formatTimestamp, toPersianDigits } from './utils/formatters';
 import {
   Trophy,
@@ -123,6 +124,22 @@ export function App() {
 
   // Simulated Live Competing Bot Activity
   const [isBotSimRunning, setIsBotSimRunning] = useState<boolean>(false);
+
+  // Explicit Mode Semantics (P0-04, AC-01, AC-02)
+  const [appMode, setAppMode] = useState<'real' | 'demo'>(() => {
+    try {
+      const saved = localStorage.getItem('parando_app_mode');
+      return saved === 'demo' ? 'demo' : 'real';
+    } catch {
+      return 'real';
+    }
+  });
+
+  const [realWsStatus, setRealWsStatus] = useState<WebSocketConnectionStatus>('DISCONNECTED');
+  const [realLatencyMs, setRealLatencyMs] = useState<number>(0);
+  const [authToken, setAuthToken] = useState<string | null>(null);
+  const [serverSettlementVouchers, setServerSettlementVouchers] = useState<Record<string, any>>({});
+  const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(true);
 
   // Hero carousel active slide
   const [heroSlideIndex, setHeroSlideIndex] = useState<number>(0);
@@ -256,6 +273,208 @@ export function App() {
     return () => clearInterval(timer);
   }, [featuredHeroModules.length]);
 
+  // Authoritative Backend Synchronizer (AC-03, AC-04)
+  const syncWithBackend = useCallback(async (compId: string, offerer: Offerer) => {
+    if (appMode !== 'real') return;
+
+    try {
+      // 1. Health check
+      const healthRes = await fetch('/api/v1/health').catch(() => null);
+      if (!healthRes || !healthRes.ok) {
+        setIsBackendHealthy(false);
+        setRealWsStatus('DISCONNECTED');
+        setRealLatencyMs(0);
+        setLastError('ارتباط با سرور بورس قطع است. داده‌های بازار در دسترس نمی‌باشد.');
+        return;
+      }
+      setIsBackendHealthy(true);
+
+      // 2. Obtain session token from authoritative server (AC-01, AC-02)
+      const sessionRes = await fetch('/api/v1/auth/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: offerer.offererId,
+          tenant_id: offerer.tenantId,
+          role: 'OFFERER',
+          eligible: offerer.isEligible,
+        }),
+      }).catch(() => null);
+
+      if (!sessionRes || !sessionRes.ok) {
+        const errJson = sessionRes ? await sessionRes.json().catch(() => null) : null;
+        setAuthToken(null);
+        setRealWsStatus('DISCONNECTED');
+        setRealLatencyMs(0);
+        setLastError(
+          errJson?.detail ||
+          'خطای احراز هویت: ارتباط با سرور بورس با شکست مواجه شد یا تنظیمات امنیتی (PARANDO_AUTH_SECRET) پیکربندی نشده است.'
+        );
+        return;
+      }
+
+      const sessionData = await sessionRes.json();
+      const token = sessionData.token;
+      setAuthToken(token);
+
+      // 3. Connect real WebSocket (AC-04)
+      const hub = RealTimeAuctionHub.getInstance();
+      hub.connectReal(compId, token);
+
+      // 4. Fetch competition state and ladder from backend (AC-03)
+      const compRes = await fetch(`/api/v1/competitions/${compId}`);
+      if (compRes.ok) {
+        const srvComp = await compRes.json();
+        const ladderRes = await fetch(`/api/v1/competitions/${compId}/ladder`);
+        const srvLadder = ladderRes.ok ? await ladderRes.json() : [];
+
+        const ladderOffers: Offer[] = srvLadder.map((item: any) => ({
+          offerId: item.offer?.offer_id || `off-${Math.random()}`,
+          competitionId: compId,
+          offererId: item.offer?.offerer_id || '',
+          amount: item.offer?.amount || 0,
+          placedAt: new Date(item.offer?.placed_at || Date.now()),
+          sequence: item.offer?.sequence || item.rank || 1,
+          idempotencyKey: item.offer?.idempotency_key || '',
+        }));
+
+        const rules = new CompetitionRules(
+          srvComp.rules?.base_price || 42_500_000_000,
+          srvComp.rules?.min_increment || 250_000_000,
+          srvComp.rules?.deposit_rate_bps || 1500
+        );
+
+        const loadedComp = new Competition({
+          competitionId: srvComp.competition_id,
+          tenantId: srvComp.tenant_id,
+          sellerId: srvComp.seller_id,
+          rules,
+          startsAt: new Date(srvComp.starts_at),
+          endsAt: new Date(srvComp.ends_at),
+          status: srvComp.status as CompetitionStatus,
+          version: srvComp.version,
+          ladderSize: srvComp.ladder_size || 5,
+          highestOffer: srvComp.highest_offer ? {
+            offerId: srvComp.highest_offer.offer_id,
+            competitionId: compId,
+            offererId: srvComp.highest_offer.offerer_id,
+            amount: srvComp.highest_offer.amount,
+            placedAt: new Date(srvComp.highest_offer.placed_at),
+            sequence: srvComp.highest_offer.sequence,
+            idempotencyKey: srvComp.highest_offer.idempotency_key,
+          } : null,
+          offerCount: srvComp.offer_count || 0,
+          ladder: ladderOffers,
+        });
+
+        setCompetition(loadedComp);
+      }
+    } catch (err: any) {
+      console.warn('Backend sync failed', err);
+      setRealWsStatus('DISCONNECTED');
+      setRealLatencyMs(0);
+      setLastError('ارتباط با سرور بورس قطع شد.');
+    }
+  }, [appMode]);
+
+  // Subscribe to real-time hub events
+  useEffect(() => {
+    const hub = RealTimeAuctionHub.getInstance();
+
+    const unsubStatus = hub.subscribeStatus((st, lat) => {
+      setRealWsStatus(st);
+      setRealLatencyMs(lat);
+    });
+
+    const unsubEvents = hub.subscribe((event) => {
+      if (event.type === 'LADDER_UPDATED') {
+        const payload = event.payload;
+        if (payload.competitionId === competition.competitionId) {
+          setCompetition((prev) => {
+            return new Competition({
+              competitionId: prev.competitionId,
+              tenantId: prev.tenantId,
+              sellerId: prev.sellerId,
+              rules: prev.rules,
+              startsAt: prev.startsAt,
+              endsAt: prev.endsAt,
+              status: prev.status,
+              version: payload.version !== undefined ? payload.version : prev.version + 1,
+              highestOffer: payload.highestOffer,
+              ladder: payload.ladder,
+              offerCount: payload.offerCount,
+              ladderSize: prev.ladderSize,
+            });
+          });
+        }
+      } else if (event.type === 'LADDER_DETERMINED') {
+        const payload = event.payload;
+        if (payload.event.competitionId === competition.competitionId) {
+          setCompetition((prev) => {
+            return new Competition({
+              competitionId: prev.competitionId,
+              tenantId: prev.tenantId,
+              sellerId: prev.sellerId,
+              rules: prev.rules,
+              startsAt: prev.startsAt,
+              endsAt: prev.endsAt,
+              status: CompetitionStatus.CLOSED,
+              version: prev.version + 1,
+              highestOffer: prev.highestOffer,
+              ladder: prev.ladder,
+              offerCount: prev.offerCount,
+              ladderSize: prev.ladderSize,
+            });
+          });
+          if (payload.voucher) {
+            setServerSettlementVouchers((v) => ({ ...v, [competition.competitionId]: payload.voucher }));
+          }
+        }
+      }
+    });
+
+    return () => {
+      unsubStatus();
+      unsubEvents();
+    };
+  }, [competition.competitionId]);
+
+  // Sync when mode, module, or active offerer changes
+  useEffect(() => {
+    const hub = RealTimeAuctionHub.getInstance();
+    const compId = `COMP-${currentModule.id.toUpperCase()}-001`;
+
+    if (appMode === 'real') {
+      setIsBotSimRunning(false);
+      syncWithBackend(compId, activeOfferer);
+    } else {
+      hub.initDemoMode();
+    }
+  }, [appMode, currentModule.id, activeOfferer.offererId, syncWithBackend]);
+
+  // Mode Switcher (AC-01, AC-02, AC-12)
+  const handleToggleMode = (newMode: 'real' | 'demo') => {
+    setAppMode(newMode);
+    try {
+      localStorage.setItem('parando_app_mode', newMode);
+    } catch {}
+
+    const hub = RealTimeAuctionHub.getInstance();
+    const compId = `COMP-${currentModule.id.toUpperCase()}-001`;
+
+    if (newMode === 'real') {
+      setIsBotSimRunning(false);
+      setLastError(null);
+      setLastSuccess('سامانه به «حالت واقعی بورس» منتقل شد. در حال برقراری ارتباط با هسته معاملاتی...');
+      syncWithBackend(compId, activeOfferer);
+    } else {
+      hub.initDemoMode();
+      setLastError(null);
+      setLastSuccess('سامانه به «حالت آزمایشی (Demo)» منتقل شد. داده‌ها شبیه‌سازی محلی هستند.');
+      setCompetition(createInitialCompetition(currentModule, currentTime));
+    }
+  };
+
   // Market Switch
   const handleSelectModule = (mod: MarketModuleConfig) => {
     setCurrentModule(mod);
@@ -285,7 +504,13 @@ export function App() {
     ];
     setProofs(updatedProofs);
     setLastError(null);
-    setLastSuccess(`نمای زنده به بازار «${mod.name}» منتقل شد.`);
+
+    if (appMode === 'real') {
+      const cid = `COMP-${mod.id.toUpperCase()}-001`;
+      syncWithBackend(cid, updatedOfferers[0]);
+    } else {
+      setLastSuccess(`نمای زنده به بازار «${mod.name}» منتقل شد.`);
+    }
   };
 
   const handleOpenQuickBid = (mod: MarketModuleConfig) => {
@@ -303,12 +528,12 @@ export function App() {
     setSelectedDetailModule(mod);
   };
 
-  // Submit Offer through pure kernel with TR-01, TR-12, TR-13, and National Network Resilience
-  const handleSubmitOffer = (
+  // Submit Offer: Real mode posts to backend; Demo mode simulates in-memory (AC-05, AC-06, AC-10)
+  const handleSubmitOffer = async (
     amount: number,
     customIdempotencyKey?: string,
     expectedVersion?: number | null
-  ) => {
+  ): Promise<boolean> => {
     setLastError(null);
     setLastSuccess(null);
 
@@ -331,9 +556,116 @@ export function App() {
       setLastSuccess(
         `پایداری شبکه ملی: به علت نوسان ارتباط، پیشنهاد با مبلغ ${formatDualCurrency(amount).rial} در صف محلی ذخیره شد.`
       );
-      return;
+      return true;
     }
 
+    // REAL MODE: Authoritative Backend Communication (AC-05, AC-06, AC-07, AC-10)
+    if (appMode === 'real') {
+      if (realWsStatus !== 'CONNECTED' && !isBackendHealthy) {
+        const errMsg = 'خطای ارتباط با هسته بورس: ارتباط با سرور قطع است. پیشنهاد ارسال نشد.';
+        setLastError(errMsg);
+        return false;
+      }
+
+      let currentToken = authToken;
+      if (!currentToken) {
+        // Attempt fast session mint
+        try {
+          const sessRes = await fetch('/api/v1/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              user_id: activeOfferer.offererId,
+              tenant_id: activeOfferer.tenantId,
+              role: 'OFFERER',
+              eligible: activeOfferer.isEligible,
+            }),
+          });
+          if (sessRes.ok) {
+            const sessData = await sessRes.json();
+            currentToken = sessData.token;
+            setAuthToken(currentToken);
+          }
+        } catch {}
+      }
+
+      if (!currentToken) {
+        const errMsg = 'خطای احراز هویت: عدم دسترسی به توکن مجاز در هسته بورس.';
+        setLastError(errMsg);
+        return false;
+      }
+
+      try {
+        const res = await fetch(`/api/v1/competitions/${competition.competitionId}/offers`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${currentToken}`,
+            'Idempotency-Key': idempotencyKey,
+          },
+          body: JSON.stringify({
+            amount,
+            idempotency_key: idempotencyKey,
+            expected_version: expectedVersion || competition.version,
+          }),
+        });
+
+        const json = await res.json();
+
+        if (!res.ok) {
+          const detail = json.detail || json.error || 'Server rejected offer';
+          const rejectedEvent: AuditEvent = {
+            id: `evt-reject-${Date.now()}-${Math.random()}`,
+            timestamp: new Date(),
+            offerId,
+            offererId: activeOfferer.offererId,
+            amount,
+            type: 'REJECTED',
+            reason: detail,
+            transitions: [],
+            rankChanges: [],
+          };
+          setAuditEvents((prev) => [rejectedEvent, ...prev]);
+          setLastError(detail);
+          return false;
+        }
+
+        // Authoritative Acceptance
+        const isReplay = json.is_duplicate_replay;
+        const newEvent: AuditEvent = {
+          id: `evt-${Date.now()}-${Math.random()}`,
+          timestamp: new Date(),
+          offerId: json.offer?.offer_id || offerId,
+          offererId: activeOfferer.offererId,
+          amount,
+          type: isReplay ? 'REPLAY' : 'ACCEPTED',
+          rank: json.rank,
+          transitions: json.transitions || [],
+          rankChanges: json.rank_changes || [],
+        };
+        setAuditEvents((prev) => [newEvent, ...prev]);
+
+        if (isReplay) {
+          setLastSuccess(
+            `پاسخ تکرارپذیر سرور TR-12: کلید «${idempotencyKey}» مطابقت داشت؛ نتیجه قطعی قبلی (رتبه ${toPersianDigits(json.rank)}) بدون اجرای تکراری بازگردانده شد.`
+          );
+        } else {
+          setLastSuccess(
+            `پیشنهاد در هسته بورس با موفقیت ثبت شد (${formatDualCurrency(amount).rial})! رتبه ${toPersianDigits(json.rank)}، نسخه v${toPersianDigits(json.version)}.`
+          );
+        }
+
+        return true;
+      } catch (err: any) {
+        const errMsg = 'خطای ارسال به سرور: ارتباط با سرور بورس قطع شد.';
+        setLastError(errMsg);
+        setRealWsStatus('DISCONNECTED');
+        setIsBackendHealthy(false);
+        return false;
+      }
+    }
+
+    // DEMO MODE: Pure domain kernel simulation in memory (AC-08)
     const clock = new FixedClock(currentTime);
     const isReplay = seenRecords.has(idempotencyKey);
 
@@ -356,7 +688,7 @@ export function App() {
       setCompetition(result.competition);
 
       const newEvent: AuditEvent = {
-        id: `evt-${Date.now()}-${Math.random()}`,
+        id: `evt-demo-${Date.now()}-${Math.random()}`,
         timestamp: currentTime,
         offerId: result.offer.offerId,
         offererId: activeOfferer.offererId,
@@ -371,19 +703,20 @@ export function App() {
 
       if (isReplay) {
         setLastSuccess(
-          `پاسخ تکرارپذیر TR-12: کلید «${idempotencyKey}» مطابقت داشت؛ نتیجه قبلی (رتبه ${toPersianDigits(result.rank)}) بدون اجرای تکراری بازگردانده شد.`
+          `[حالت آزمایشی] پاسخ تکرارپذیر TR-12: کلید «${idempotencyKey}» مطابقت داشت (رتبه ${toPersianDigits(result.rank)}).`
         );
       } else {
         setLastSuccess(
-          `پیشنهاد در رتبه ${toPersianDigits(result.rank)} ثبت شد (${formatDualCurrency(amount).rial})! ترتیب TR-13: #${toPersianDigits(result.offer.sequence)}، نسخه v${toPersianDigits(result.competition.version)}.`
+          `[حالت آزمایشی] پیشنهاد شبیه‌سازی‌شده در رتبه ${toPersianDigits(result.rank)} ثبت شد (${formatDualCurrency(amount).rial})!`
         );
       }
+      return true;
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       const code = err instanceof CompetitionError ? (err as CompetitionError).code : 'ERROR';
 
       const rejectedEvent: AuditEvent = {
-        id: `evt-reject-${Date.now()}-${Math.random()}`,
+        id: `evt-reject-demo-${Date.now()}-${Math.random()}`,
         timestamp: currentTime,
         offerId,
         offererId: activeOfferer.offererId,
@@ -395,12 +728,19 @@ export function App() {
       };
 
       setAuditEvents((prev) => [rejectedEvent, ...prev]);
-      setLastError(`${code}: ${msg}`);
+      setLastError(`[حالت آزمایشی] ${code}: ${msg}`);
+      return false;
     }
   };
 
-  // Bot Simulation: Trigger simulated competing participant bid
+  // Bot Simulation: Strictly restricted to Demo Mode (AC-08, AC-12)
   const handleSimulateBotBid = useCallback(() => {
+    if (appMode === 'real') {
+      setIsBotSimRunning(false);
+      setLastError('شبیه‌ساز رفتار رقبا صرفاً در «حالت آزمایشی (Demo Mode)» مجاز است.');
+      return;
+    }
+
     const candidateBots = offerers.filter(
       (o) => o.offererId !== activeOfferer.offererId && o.offererId !== currentModule.sellerId && o.isEligible
     );
@@ -444,23 +784,84 @@ export function App() {
         },
         ...prev,
       ]);
-      setLastSuccess(`پیشنهاد زنده جدید از رقیب ${randomBot.offererId} در رتبه ${toPersianDigits(res.rank)} ثبت شد!`);
+      setLastSuccess(`[حالت آزمایشی] پیشنهاد شبیه‌سازی‌شده از ${randomBot.offererId} در رتبه ${toPersianDigits(res.rank)} ثبت شد.`);
     } catch {
       // Ignore simulated bot errors
     }
-  }, [activeOfferer.offererId, competition, currentModule, currentTime, guard, offerers, seenRecords]);
+  }, [activeOfferer.offererId, appMode, competition, currentModule, currentTime, guard, offerers, seenRecords]);
 
-  // Periodic bot bids if active
+  // Periodic bot bids if active (only allowed in Demo Mode)
   useEffect(() => {
-    if (!isBotSimRunning) return;
+    if (!isBotSimRunning || appMode === 'real') return;
     const interval = setInterval(() => {
       handleSimulateBotBid();
     }, 4500);
     return () => clearInterval(interval);
-  }, [isBotSimRunning, handleSimulateBotBid]);
+  }, [isBotSimRunning, appMode, handleSimulateBotBid]);
 
-  // Settlement execution (ADR-003)
-  const handleSettleCompetition = () => {
+  // Settlement execution (ADR-003, AC-11)
+  const handleSettleCompetition = async () => {
+    if (appMode === 'real') {
+      try {
+        const sellerSess = await fetch('/api/v1/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            user_id: competition.sellerId,
+            tenant_id: competition.tenantId,
+            role: 'SELLER',
+            eligible: true,
+          }),
+        });
+
+        if (!sellerSess.ok) {
+          setLastError('خطا در دریافت مجوز فروشنده جهت اجرای تسویه رسمی.');
+          return;
+        }
+
+        const sellerData = await sellerSess.json();
+        const sellerToken = sellerData.token;
+
+        const settleRes = await fetch(`/api/v1/competitions/${competition.competitionId}/settle`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sellerToken}`,
+          },
+        });
+
+        if (!settleRes.ok) {
+          const errData = await settleRes.json();
+          setLastError(errData.detail || 'خطا در تسویه سرور.');
+          return;
+        }
+
+        const settleData = await settleRes.json();
+        setServerSettlementVouchers((v) => ({ ...v, [competition.competitionId]: settleData.voucher }));
+        setCompetition((prev) => {
+          return new Competition({
+            competitionId: prev.competitionId,
+            tenantId: prev.tenantId,
+            sellerId: prev.sellerId,
+            rules: prev.rules,
+            startsAt: prev.startsAt,
+            endsAt: new Date(),
+            status: CompetitionStatus.CLOSED,
+            version: prev.version + 1,
+            highestOffer: prev.highestOffer,
+            offerCount: prev.offerCount,
+            ladderSize: prev.ladderSize,
+            ladder: prev.ladder,
+          });
+        });
+        setLastSuccess(`تسویه قطعی رسمی ADR-003 در سرور بورس با تمبر امنیتی ${settleData.voucher?.integrity_hash?.slice(0, 16)}... اجرا گردید.`);
+      } catch (err: any) {
+        setLastError('خطا در برقراری ارتباط با سرور بورس برای تسویه.');
+      }
+      return;
+    }
+
+    // Demo Mode local settlement
     setCompetition(
       new Competition({
         competitionId: competition.competitionId,
@@ -477,7 +878,7 @@ export function App() {
         ladder: competition.ladder,
       })
     );
-    setLastSuccess('تسویه قطعی ADR-003 اجرا گردید: برنده نهایی مشخص و وجوه مسدودی سایرین آزاد شد.');
+    setLastSuccess('[حالت آزمایشی] تسویه شبیه‌سازی‌شده ADR-003 اجرا گردید.');
   };
 
   // Top Up & Funds
@@ -588,6 +989,10 @@ export function App() {
     >
       {/* 1. Global Navigation Bar */}
       <TopHeader
+        appMode={appMode}
+        onToggleMode={handleToggleMode}
+        realWsStatus={realWsStatus}
+        latencyMs={appMode === 'real' ? realLatencyMs : 24}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         selectedCategory={selectedCategory}
@@ -660,19 +1065,22 @@ export function App() {
             onSelectCompetition={(mod) => handleSelectModule(mod)}
             onClose={() => setIsSellerDashboardView(false)}
             isDarkTheme={isDarkTheme}
+            appMode={appMode}
+            serverVoucher={serverSettlementVouchers[competition.competitionId]}
           />
         ) : selectedDetailModule ? (
           /* ---------------------------------------------------- */
           /* VIEW: AUCTION DETAIL PAGE (SECTION 3.C)              */
           /* ---------------------------------------------------- */
           <AuctionDetailView
+            appMode={appMode}
             module={selectedDetailModule}
             competition={selectedDetailModule.id === currentModule.id ? competition : createInitialCompetition(selectedDetailModule, currentTime)}
             currentTime={currentTime}
             onBack={() => setSelectedDetailModule(null)}
             onOpenQuickBid={handleOpenQuickBid}
             isDarkTheme={isDarkTheme}
-            isLiveConnected={isOnline}
+            isLiveConnected={appMode === 'real' ? realWsStatus === 'CONNECTED' : isOnline}
             isWatchlisted={watchlistIds.includes(selectedDetailModule.id)}
             onToggleWatchlist={handleToggleWatchlist}
           />
@@ -832,6 +1240,7 @@ export function App() {
                     return (
                       <AuctionCard
                         key={mod.id}
+                        appMode={appMode}
                         module={mod}
                         highestOffer={compHighest}
                         ladder={compLadder}
@@ -1032,6 +1441,8 @@ export function App() {
                   module={currentModule}
                   onSettleCompetition={handleSettleCompetition}
                   isDarkTheme={isDarkTheme}
+                  appMode={appMode}
+                  serverVoucher={serverSettlementVouchers[competition.competitionId]}
                 />
 
                 {/* Transitions & Audit Log */}
@@ -1107,6 +1518,8 @@ export function App() {
         onSubmitOffer={handleSubmitOffer}
         isDarkTheme={isDarkTheme}
         isOnline={isOnline}
+        appMode={appMode}
+        isServerConnected={appMode === 'real' ? realWsStatus === 'CONNECTED' : true}
       />
 
       {/* Watchlist Modal */}

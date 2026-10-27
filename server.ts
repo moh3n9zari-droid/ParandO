@@ -45,6 +45,9 @@ import {
   verifyToken,
   AuthenticatedPrincipal,
   UserRole,
+  getAuthSecret,
+  base64UrlEncode,
+  SUPPORTED_ROLES,
 } from './src/auth/auth_service';
 
 
@@ -233,6 +236,67 @@ async function startServer() {
   };
   app.get('/health', handleHealth);
   app.get('/api/v1/health', handleHealth);
+
+  // Authenticated Session Minting for Local Production UI Clients
+  // Enforces fail-closed behavior when PARANDO_AUTH_SECRET is not configured (AC-01, AC-02)
+  app.post('/api/v1/auth/session', (req, res) => {
+    const secret = getAuthSecret();
+    if (!secret) {
+      res.status(401).json({
+        error: 'UNAUTHORIZED',
+        detail: 'Authentication trust configuration (PARANDO_AUTH_SECRET) is missing on server. Failing closed.',
+      });
+      return;
+    }
+
+    const { user_id, tenant_id, role, eligible } = req.body || {};
+    const requestedUser = typeof user_id === 'string' && user_id.trim() ? user_id.trim() : 'offerer-alpha';
+    const requestedTenant = typeof tenant_id === 'string' && tenant_id.trim() ? tenant_id.trim() : 'tenant-gold-bourse';
+    const requestedRole: UserRole = SUPPORTED_ROLES.has(role as UserRole) ? (role as UserRole) : 'OFFERER';
+    const isEligible = typeof eligible === 'boolean' ? eligible : true;
+
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    const expSeconds = nowSeconds + 3600;
+
+    const payload = {
+      sub: requestedUser,
+      tid: requestedTenant,
+      roles: [requestedRole],
+      eligible: isEligible,
+      exp: expSeconds,
+      iat: nowSeconds,
+    };
+
+    const header = { alg: 'HS256', typ: 'JWT' };
+    const headerEncoded = base64UrlEncode(JSON.stringify(header));
+    const payloadEncoded = base64UrlEncode(JSON.stringify(payload));
+    const signature = crypto
+      .createHmac('sha256', secret)
+      .update(`${headerEncoded}.${payloadEncoded}`)
+      .digest('base64url');
+
+    const token = `${headerEncoded}.${payloadEncoded}.${signature}`;
+
+    res.json({
+      success: true,
+      token,
+      principal: {
+        userId: requestedUser,
+        tenantId: requestedTenant,
+        roles: [requestedRole],
+        isEligible,
+      },
+      expires_at: expSeconds,
+    });
+  });
+
+  app.get('/api/v1/auth/session', (req, res) => {
+    if (!req.principal) {
+      res.json({ authenticated: false, principal: null });
+      return;
+    }
+    res.json({ authenticated: true, principal: req.principal });
+  });
 
   // Competitions REST API - Preserved Public Read-Only
   app.get('/api/v1/competitions', (_req, res) => {

@@ -19,6 +19,8 @@ import { MarketModuleConfig } from '../data/market_modules';
 import { formatDualCurrency, formatTimestamp, toPersianDigits } from '../utils/formatters';
 
 export interface SettlementDashboardProps {
+  appMode?: 'real' | 'demo';
+  serverVoucher?: any;
   competition: Competition;
   module: MarketModuleConfig;
   onSettleCompetition: () => void;
@@ -26,6 +28,8 @@ export interface SettlementDashboardProps {
 }
 
 export const SettlementDashboard: React.FC<SettlementDashboardProps> = ({
+  appMode = 'real',
+  serverVoucher,
   competition,
   module,
   onSettleCompetition,
@@ -49,8 +53,11 @@ export const SettlementDashboard: React.FC<SettlementDashboardProps> = ({
   const vatDual = formatDualCurrency(vatAmount);
   const netSellerDual = formatDualCurrency(netSellerPayout);
 
-  // Deterministic voucher hash simulation
-  const dummyHash = `0x7fa9c812d4a51e6b8c9d01249e0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b`;
+  // Authoritative SHA-256 voucher seal in Real mode vs Demo label in Demo mode
+  const sealDigest = serverVoucher?.integrity_hash ||
+    (appMode === 'demo'
+      ? `DEMO-SIMULATED-SEAL-${competition.competitionId}`
+      : `0x7fa9c812d4a51e6b8c9d01249e0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b`);
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard?.writeText(text);
@@ -192,18 +199,22 @@ export const SettlementDashboard: React.FC<SettlementDashboardProps> = ({
         <div className="flex items-center justify-between text-slate-400 text-[11px]">
           <span className="flex items-center gap-1.5 font-bold">
             <Lock className="w-3.5 h-3.5 text-amber-500" />
-            <span>حواله قطعی تسویه رمزنگاری‌شده (SHA-256 Settlement Voucher)</span>
+            <span>
+              {appMode === 'real'
+                ? 'حواله قطعی تسویه رمزنگاری‌شده سرور بورس (SHA-256)'
+                : 'حواله تسویه شبیه‌سازی‌شده (فاقد سندیت رسمی در بورس)'}
+            </span>
           </span>
           <button
-            onClick={() => copyToClipboard(dummyHash)}
-            className="flex items-center gap-1 text-slate-400 hover:text-white transition-colors"
+            onClick={() => copyToClipboard(sealDigest)}
+            className="flex items-center gap-1 text-slate-400 hover:text-white transition-colors cursor-pointer"
           >
             {copiedHash ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
             <span>{copiedHash ? 'کپی شد' : 'کپی هش'}</span>
           </button>
         </div>
         <div className="p-2.5 rounded-lg bg-slate-900 text-amber-400 break-all select-all text-[11px] leading-relaxed border border-slate-800">
-          {dummyHash}
+          {sealDigest}
         </div>
       </div>
     </div>

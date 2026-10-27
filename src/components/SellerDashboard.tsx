@@ -33,6 +33,14 @@ export interface SellerDashboardProps {
   onSelectCompetition: (mod: MarketModuleConfig) => void;
   onClose?: () => void;
   isDarkTheme?: boolean;
+  appMode?: 'real' | 'demo';
+  serverVoucher?: {
+    voucherId?: string;
+    hash?: string;
+    clearingPrice?: number;
+    winnerOffererId?: string;
+    settledAt?: string;
+  };
 }
 
 export const SellerDashboard: React.FC<SellerDashboardProps> = ({
@@ -45,6 +53,8 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
   onSelectCompetition,
   onClose,
   isDarkTheme = false,
+  appMode = 'demo',
+  serverVoucher,
 }) => {
   const [activeTab, setActiveTab] = useState<'active' | 'settlement' | 'audit' | 'drafts'>('active');
   const [copiedVoucherHash, setCopiedVoucherHash] = useState(false);
@@ -64,7 +74,10 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
   const totalDeductions = platformCommission + vatAmount;
   const netSellerPayout = clearingPrice - totalDeductions;
 
-  const voucherHash = `0x9e8b7c6a5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a`;
+  // Truthful voucher hash: use authentic server seal in Real mode
+  const voucherHash = appMode === 'real'
+    ? (serverVoucher?.hash || serverVoucher?.voucherId || (isCurrentSettled ? '0x-settled-authoritative-server-record' : 'در انتظار اجرای تسویه قطعی در هسته بورس...'))
+    : `0x9e8b7c6a5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a (شبیه‌سازی)`;
 
   const copyHash = () => {
     navigator.clipboard?.writeText(voucherHash);

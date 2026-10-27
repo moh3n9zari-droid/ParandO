@@ -27,6 +27,7 @@ import { PriceLadderWidget } from './PriceLadderWidget';
 import { formatDualCurrency, formatDuration, formatTimestamp, toPersianDigits } from '../utils/formatters';
 
 export interface AuctionDetailViewProps {
+  appMode?: 'real' | 'demo';
   module: MarketModuleConfig;
   competition: Competition;
   currentTime: Date;
@@ -39,6 +40,7 @@ export interface AuctionDetailViewProps {
 }
 
 export const AuctionDetailView: React.FC<AuctionDetailViewProps> = ({
+  appMode = 'real',
   module,
   competition,
   currentTime,
@@ -132,6 +134,16 @@ export const AuctionDetailView: React.FC<AuctionDetailViewProps> = ({
                 <span className="px-3 py-1 rounded-full text-xs font-bold bg-[#FF5000] text-white shadow-md">
                   {module.badge}
                 </span>
+
+                {appMode === 'demo' ? (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/90 text-slate-950 shadow-md">
+                    حالت آزمایشی (شبیه‌سازی)
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-md">
+                    مظنه رسمی بورس (نسخه v{toPersianDigits(competition.version)})
+                  </span>
+                )}
 
                 <span
                   className={`px-3 py-1 rounded-full text-xs font-bold backdrop-blur-md shadow-md ${
