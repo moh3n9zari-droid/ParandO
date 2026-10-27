@@ -363,13 +363,17 @@ export async function terminateServerGracefully(
 
 export function spawnProductionServer(port: number, extraEnv?: NodeJS.ProcessEnv): ChildProcess {
   const tsxBin = path.resolve('node_modules/.bin/tsx');
+  const mergedEnv: NodeJS.ProcessEnv = {
+    ...process.env,
+    ...extraEnv,
+    NODE_ENV: 'production',
+    PORT: String(port),
+  };
+  if (extraEnv && !('PARANDO_AUTH_SECRET' in extraEnv)) {
+    delete mergedEnv.PARANDO_AUTH_SECRET;
+  }
   const child = spawn(tsxBin, ['server.ts'], {
-    env: {
-      ...process.env,
-      ...extraEnv,
-      NODE_ENV: 'production',
-      PORT: String(port),
-    },
+    env: mergedEnv,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: process.platform !== 'win32',
   });

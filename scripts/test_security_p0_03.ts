@@ -49,33 +49,37 @@ export function assertNoCredentialLeak(
 ): void {
   const protoHeader = responseHeaders?.['sec-websocket-protocol'];
   if (typeof protoHeader === 'string') {
-    assert(
-      !protoHeader.includes(token),
-      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol echoes raw token!`
-    );
-    assert(
-      !protoHeader.toLowerCase().startsWith('bearer.'),
-      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol starts with 'bearer.' prefix!`
-    );
-    assert(
-      protoHeader.split('.').length !== 3,
-      `[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol resembles a JWT structure!`
-    );
+    if (protoHeader.includes(token)) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol echoes raw token!`);
+    }
+    assert(true, `${contextDesc}: Response Sec-WebSocket-Protocol does not echo raw token`);
+
+    if (protoHeader.toLowerCase().startsWith('bearer.')) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol starts with 'bearer.' prefix!`);
+    }
+    assert(true, `${contextDesc}: Response Sec-WebSocket-Protocol does not start with 'bearer.' prefix`);
+
+    if (protoHeader.split('.').length === 3) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: Response Sec-WebSocket-Protocol resembles a JWT structure!`);
+    }
+    assert(true, `${contextDesc}: Response Sec-WebSocket-Protocol does not resemble a JWT structure`);
   }
 
   if (negotiatedProtocol && negotiatedProtocol.length > 0) {
-    assert(
-      !negotiatedProtocol.includes(token),
-      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol property echoes raw token!`
-    );
-    assert(
-      !negotiatedProtocol.toLowerCase().startsWith('bearer.'),
-      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol property starts with 'bearer.' prefix!`
-    );
-    assert(
-      negotiatedProtocol.split('.').length !== 3,
-      `[SECURITY BLOCKER] ${contextDesc}: ws.protocol resembles a JWT structure!`
-    );
+    if (negotiatedProtocol.includes(token)) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: ws.protocol property echoes raw token!`);
+    }
+    assert(true, `${contextDesc}: ws.protocol property does not echo raw token`);
+
+    if (negotiatedProtocol.toLowerCase().startsWith('bearer.')) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: ws.protocol property starts with 'bearer.' prefix!`);
+    }
+    assert(true, `${contextDesc}: ws.protocol property does not start with 'bearer.' prefix`);
+
+    if (negotiatedProtocol.split('.').length === 3) {
+      throw new Error(`[SECURITY BLOCKER] ${contextDesc}: ws.protocol resembles a JWT structure!`);
+    }
+    assert(true, `${contextDesc}: ws.protocol property does not resemble a JWT structure`);
   }
 }
 
@@ -614,6 +618,7 @@ export async function runWebSocketSecurityTests(): Promise<void> {
     });
     assert(rawRes1.statusCode === 101, 'Raw upgrade request with parando-v1 and bearer token returned 101');
     assert(rawRes1.headers['sec-websocket-protocol'] === 'parando-v1', "Raw response protocol is 'parando-v1'");
+    assert(!JSON.stringify(rawRes1.headers).includes(goldTrader2Token), 'Raw parando-v1: token string absent from all handshake headers');
     assertNoCredentialLeak(rawRes1.headers, undefined, goldTrader2Token, 'Raw parando-v1 handshake');
     rawRes1.socket?.destroy();
 
@@ -623,6 +628,7 @@ export async function runWebSocketSecurityTests(): Promise<void> {
     });
     assert(rawRes2.statusCode === 101, 'Raw upgrade request with bearer pair returned 101');
     assert(rawRes2.headers['sec-websocket-protocol'] === 'bearer', "Raw response protocol is 'bearer'");
+    assert(!JSON.stringify(rawRes2.headers).includes(goldTrader2Token), 'Raw bearer pair: token string absent from all handshake headers');
     assertNoCredentialLeak(rawRes2.headers, undefined, goldTrader2Token, 'Raw bearer pair handshake');
     rawRes2.socket?.destroy();
 
@@ -636,6 +642,7 @@ export async function runWebSocketSecurityTests(): Promise<void> {
       rawRes3.headers['sec-websocket-protocol'] === undefined,
       'Server MUST NOT negotiate or echo Sec-WebSocket-Protocol when only credential was supplied'
     );
+    assert(!JSON.stringify(rawRes3.headers).includes(goldTrader2Token), 'Raw isolated bearer.<token>: token string absent from all handshake headers');
     assertNoCredentialLeak(rawRes3.headers, undefined, goldTrader2Token, 'Raw isolated bearer.<token> handshake');
     rawRes3.socket?.destroy();
 
@@ -648,26 +655,31 @@ export async function runWebSocketSecurityTests(): Promise<void> {
       rawRes4.headers['sec-websocket-protocol'] === undefined,
       'Server MUST NOT negotiate or echo raw compact JWT in Sec-WebSocket-Protocol'
     );
+    assert(!JSON.stringify(rawRes4.headers).includes(goldTrader2Token), 'Raw compact JWT: token string absent from all handshake headers');
     assertNoCredentialLeak(rawRes4.headers, undefined, goldTrader2Token, 'Raw compact JWT handshake');
     rawRes4.socket?.destroy();
 
     // Test 6e: Negative Test / Assertion Sensitivity Verification
-    // Prove that assertNoCredentialLeak would fail if the server ever echoed credentials (detects regressions)
+    // Prove that assertNoCredentialLeak strictly fails and throws [SECURITY BLOCKER] when credential leakage is deliberately simulated
+    console.log('  -> [Negative Control] Injecting synthetic credential reflection into detector to verify detection...');
     let caughtSimulatedLeak = false;
     try {
       assertNoCredentialLeak(
         { 'sec-websocket-protocol': `bearer.${goldTrader2Token}` },
         `bearer.${goldTrader2Token}`,
         goldTrader2Token,
-        'Simulated Vulnerable Server Response'
+        'Synthetic Negative Control Input'
       );
     } catch (err: any) {
       caughtSimulatedLeak = true;
-      assert(err.message.includes('SECURITY BLOCKER'), 'Assertion accurately catches credential reflection');
+      assert(
+        err.message.includes('SECURITY BLOCKER'),
+        `[Negative Control] Detector accurately threw [SECURITY BLOCKER] on synthetic leak: "${err.message}"`
+      );
     }
     assert(
       caughtSimulatedLeak,
-      'Negative test passed: regression suite strictly fails if credentials are leaked in handshake response or ws.protocol'
+      '[Negative Control] Negative test passed: detector strictly throws on simulated credential reflection'
     );
 
     console.log('✓ Test 6 passed: Sec-WebSocket-Protocol subprotocol authentication verified with zero credential reflection.\n');
