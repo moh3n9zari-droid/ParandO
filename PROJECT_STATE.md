@@ -34,11 +34,11 @@ Primary Branch: main
 
 Current Repository Revision:
 
-UNKNOWN
+cc89dbe
 
 Last Audited Commit:
 
-UNKNOWN
+PENDING
 
 Last Audited Branch:
 
@@ -46,7 +46,7 @@ main
 
 Last Repository Review Date:
 
-UNKNOWN
+PENDING
 
 ---
 
@@ -186,15 +186,15 @@ Unverified Capabilities:
 
 Verification Date:
 
-UNKNOWN
+PENDING
 
 Verified By:
 
-UNKNOWN
+PENDING
 
 Verification Scope:
 
-UNKNOWN
+PENDING
 
 ---
 
