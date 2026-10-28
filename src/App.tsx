@@ -129,9 +129,9 @@ export function App() {
   const [appMode, setAppMode] = useState<'real' | 'demo'>(() => {
     try {
       const saved = localStorage.getItem('parando_app_mode');
-      return saved === 'demo' ? 'demo' : 'real';
+      return saved === 'real' ? 'real' : 'demo';
     } catch {
-      return 'real';
+      return 'demo';
     }
   });
 
@@ -139,7 +139,10 @@ export function App() {
   const [realLatencyMs, setRealLatencyMs] = useState<number>(0);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [serverSettlementVouchers, setServerSettlementVouchers] = useState<Record<string, any>>({});
-  const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(true);
+  const [isBackendHealthy, setIsBackendHealthy] = useState<boolean>(false);
+  const [isRealBackendSyncing, setIsRealBackendSyncing] = useState<boolean>(false);
+  const [isAuthoritativeLoaded, setIsAuthoritativeLoaded] = useState<boolean>(false);
+  const [realBackendError, setRealBackendError] = useState<string | null>(null);
 
   // Hero carousel active slide
   const [heroSlideIndex, setHeroSlideIndex] = useState<number>(0);
@@ -277,6 +280,9 @@ export function App() {
   const syncWithBackend = useCallback(async (compId: string, offerer: Offerer) => {
     if (appMode !== 'real') return;
 
+    setIsRealBackendSyncing(true);
+    setRealBackendError(null);
+
     try {
       // 1. Health check
       const healthRes = await fetch('/api/v1/health').catch(() => null);
@@ -284,7 +290,11 @@ export function App() {
         setIsBackendHealthy(false);
         setRealWsStatus('DISCONNECTED');
         setRealLatencyMs(0);
-        setLastError('ارتباط با سرور بورس قطع است. داده‌های بازار در دسترس نمی‌باشد.');
+        setIsAuthoritativeLoaded(false);
+        const errMsg = 'ارتباط با سرور بورس قطع است. داده‌های بازار در دسترس نمی‌باشد.';
+        setRealBackendError(errMsg);
+        setLastError(errMsg);
+        setIsRealBackendSyncing(false);
         return;
       }
       setIsBackendHealthy(true);
@@ -306,10 +316,13 @@ export function App() {
         setAuthToken(null);
         setRealWsStatus('DISCONNECTED');
         setRealLatencyMs(0);
-        setLastError(
+        setIsAuthoritativeLoaded(false);
+        const errMsg =
           errJson?.detail ||
-          'خطای احراز هویت: ارتباط با سرور بورس با شکست مواجه شد یا تنظیمات امنیتی (PARANDO_AUTH_SECRET) پیکربندی نشده است.'
-        );
+          'خطای احراز هویت: ارتباط با سرور بورس با شکست مواجه شد یا تنظیمات امنیتی (PARANDO_AUTH_SECRET) پیکربندی نشده است.';
+        setRealBackendError(errMsg);
+        setLastError(errMsg);
+        setIsRealBackendSyncing(false);
         return;
       }
 
@@ -322,11 +335,11 @@ export function App() {
       hub.connectReal(compId, token);
 
       // 4. Fetch competition state and ladder from backend (AC-03)
-      const compRes = await fetch(`/api/v1/competitions/${compId}`);
-      if (compRes.ok) {
+      const compRes = await fetch(`/api/v1/competitions/${compId}`).catch(() => null);
+      if (compRes && compRes.ok) {
         const srvComp = await compRes.json();
-        const ladderRes = await fetch(`/api/v1/competitions/${compId}/ladder`);
-        const srvLadder = ladderRes.ok ? await ladderRes.json() : [];
+        const ladderRes = await fetch(`/api/v1/competitions/${compId}/ladder`).catch(() => null);
+        const srvLadder = ladderRes && ladderRes.ok ? await ladderRes.json() : [];
 
         const ladderOffers: Offer[] = srvLadder.map((item: any) => ({
           offerId: item.offer?.offer_id || `off-${Math.random()}`,
@@ -368,12 +381,44 @@ export function App() {
         });
 
         setCompetition(loadedComp);
+        setIsAuthoritativeLoaded(true);
+        setRealBackendError(null);
+      } else {
+        setIsAuthoritativeLoaded(false);
+        const errMsg = 'خطا در دریافت وضعیت رقابت از هسته بورس.';
+        setRealBackendError(errMsg);
+        setLastError(errMsg);
       }
+
+      // 5. Fetch server-verified commitment proofs for active offerer
+      const proofsRes = await fetch(`/api/v1/proofs/${offerer.offererId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      }).catch(() => null);
+      if (proofsRes && proofsRes.ok) {
+        const srvProofs = await proofsRes.json();
+        if (Array.isArray(srvProofs) && srvProofs.length > 0) {
+          setProofs(
+            srvProofs.map((p: any) => ({
+              offererId: p.offerer_id,
+              tenantId: p.tenant_id,
+              guaranteedAmount: p.guaranteed_amount,
+              validUntil: new Date(p.valid_until),
+            }))
+          );
+        }
+      }
+
+      setIsRealBackendSyncing(false);
     } catch (err: any) {
       console.warn('Backend sync failed', err);
+      setIsBackendHealthy(false);
       setRealWsStatus('DISCONNECTED');
       setRealLatencyMs(0);
-      setLastError('ارتباط با سرور بورس قطع شد.');
+      setIsAuthoritativeLoaded(false);
+      const errMsg = 'ارتباط با سرور بورس قطع شد.';
+      setRealBackendError(errMsg);
+      setLastError(errMsg);
+      setIsRealBackendSyncing(false);
     }
   }, [appMode]);
 
@@ -464,11 +509,21 @@ export function App() {
 
     if (newMode === 'real') {
       setIsBotSimRunning(false);
+      setIsAuthoritativeLoaded(false);
+      setIsBackendHealthy(false);
+      setRealWsStatus('DISCONNECTED');
+      setRealLatencyMs(0);
       setLastError(null);
       setLastSuccess('سامانه به «حالت واقعی بورس» منتقل شد. در حال برقراری ارتباط با هسته معاملاتی...');
       syncWithBackend(compId, activeOfferer);
     } else {
+      hub.disconnectReal();
       hub.initDemoMode();
+      setAuthToken(null);
+      setIsAuthoritativeLoaded(false);
+      setRealBackendError(null);
+      setRealWsStatus('DISCONNECTED');
+      setRealLatencyMs(0);
       setLastError(null);
       setLastSuccess('سامانه به «حالت آزمایشی (Demo)» منتقل شد. داده‌ها شبیه‌سازی محلی هستند.');
       setCompetition(createInitialCompetition(currentModule, currentTime));
@@ -561,8 +616,8 @@ export function App() {
 
     // REAL MODE: Authoritative Backend Communication (AC-05, AC-06, AC-07, AC-10)
     if (appMode === 'real') {
-      if (realWsStatus !== 'CONNECTED' && !isBackendHealthy) {
-        const errMsg = 'خطای ارتباط با هسته بورس: ارتباط با سرور قطع است. پیشنهاد ارسال نشد.';
+      if (realWsStatus !== 'CONNECTED' || !isBackendHealthy || !isAuthoritativeLoaded) {
+        const errMsg = 'خطای ارتباط با هسته بورس: ارتباط با سرور قطع است یا داده‌های بازار بارگذاری نشده‌اند. پیشنهاد ارسال نشد.';
         setLastError(errMsg);
         return false;
       }
@@ -802,6 +857,10 @@ export function App() {
   // Settlement execution (ADR-003, AC-11)
   const handleSettleCompetition = async () => {
     if (appMode === 'real') {
+      if (!isBackendHealthy || !isAuthoritativeLoaded || realWsStatus !== 'CONNECTED') {
+        setLastError('امکان تسویه رسمی در حالت واقعی وجود ندارد: ارتباط با سرور بورس قطع است یا داده‌های بازار بارگذاری نشده‌اند.');
+        return;
+      }
       try {
         const sellerSess = await fetch('/api/v1/auth/session', {
           method: 'POST',
@@ -992,7 +1051,7 @@ export function App() {
         appMode={appMode}
         onToggleMode={handleToggleMode}
         realWsStatus={realWsStatus}
-        latencyMs={appMode === 'real' ? realLatencyMs : 24}
+        latencyMs={appMode === 'real' ? realLatencyMs : 0}
         searchQuery={searchQuery}
         onSearchChange={setSearchQuery}
         selectedCategory={selectedCategory}
@@ -1024,6 +1083,42 @@ export function App() {
 
       {/* Main Body per Active Tab or View */}
       <main className="flex-1 w-full space-y-6">
+        {/* Real Mode Unconnected / Syncing Status Banner (AC-01, AC-02, AC-07) */}
+        {appMode === 'real' && (
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-3">
+            {isRealBackendSyncing ? (
+              <div className="p-3.5 rounded-2xl border text-xs sm:text-sm font-bold flex items-center justify-between gap-3 shadow-xs bg-sky-500/10 text-sky-400 border-sky-500/30">
+                <div className="flex items-center gap-2">
+                  <div className="w-2 h-2 rounded-full bg-sky-400 animate-ping" />
+                  <span>حالت واقعی بورس: در حال همگام‌سازی و بارگذاری داده‌های رسمی از هسته معاملاتی...</span>
+                </div>
+              </div>
+            ) : (!isBackendHealthy || realWsStatus !== 'CONNECTED' || !isAuthoritativeLoaded) ? (
+              <div className="p-3.5 rounded-2xl border text-xs sm:text-sm font-bold flex flex-wrap items-center justify-between gap-3 shadow-xs bg-red-500/10 text-red-400 border-red-500/30">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+                  <span>
+                    {realBackendError || 'حالت واقعی بورس: ارتباط با سرور بورس قطع است. داده‌های معاملات در دسترس نمی‌باشد و امکان ثبت سفارش وجود ندارد.'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => syncWithBackend(`COMP-${currentModule.id.toUpperCase()}-001`, activeOfferer)}
+                    className="px-3 py-1 rounded-lg bg-red-600/30 hover:bg-red-600/50 text-white text-xs border border-red-500/40 transition-colors cursor-pointer"
+                  >
+                    تلاش مجدد اتصال
+                  </button>
+                  <button
+                    onClick={() => handleToggleMode('demo')}
+                    className="px-3 py-1 rounded-lg bg-amber-500 text-slate-950 font-black text-xs hover:bg-amber-400 transition-colors cursor-pointer"
+                  >
+                    انتقال به محیط شبیه‌سازی (Demo)
+                  </button>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        )}
         {/* Alerts / Feedback Bar */}
         {(lastError || lastSuccess) && (
           <div className="max-w-7xl mx-auto px-4 sm:px-6 pt-3">
@@ -1080,7 +1175,7 @@ export function App() {
             onBack={() => setSelectedDetailModule(null)}
             onOpenQuickBid={handleOpenQuickBid}
             isDarkTheme={isDarkTheme}
-            isLiveConnected={appMode === 'real' ? realWsStatus === 'CONNECTED' : isOnline}
+            isLiveConnected={appMode === 'real' ? realWsStatus === 'CONNECTED' && isAuthoritativeLoaded : false}
             isWatchlisted={watchlistIds.includes(selectedDetailModule.id)}
             onToggleWatchlist={handleToggleWatchlist}
           />
@@ -1241,6 +1336,7 @@ export function App() {
                       <AuctionCard
                         key={mod.id}
                         appMode={appMode}
+                        isServerConnected={appMode === 'real' ? realWsStatus === 'CONNECTED' && isAuthoritativeLoaded : false}
                         module={mod}
                         highestOffer={compHighest}
                         ladder={compLadder}

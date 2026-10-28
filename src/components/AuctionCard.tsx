@@ -20,6 +20,7 @@ import { formatDualCurrency, formatDuration, toPersianDigits } from '../utils/fo
 
 export interface AuctionCardProps {
   appMode?: 'real' | 'demo';
+  isServerConnected?: boolean;
   module: MarketModuleConfig;
   highestOffer?: Offer | null;
   ladder: readonly Offer[];
@@ -33,7 +34,8 @@ export interface AuctionCardProps {
 }
 
 export const AuctionCard: React.FC<AuctionCardProps> = ({
-  appMode = 'real',
+  appMode = 'demo',
+  isServerConnected = false,
   module,
   highestOffer,
   ladder,
@@ -148,9 +150,13 @@ export const AuctionCard: React.FC<AuctionCardProps> = ({
                 <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-500/20 text-amber-500 border border-amber-500/30">
                   شبیه‌سازی
                 </span>
-              ) : (
+              ) : isServerConnected ? (
                 <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-500/15 text-emerald-500 border border-emerald-500/30">
-                  مظنه بورس
+                  مظنه بورس (برخط)
+                </span>
+              ) : (
+                <span className="px-1.5 py-0.2 rounded text-[9px] font-bold bg-red-500/15 text-red-500 border border-red-500/30">
+                  بورس (قطع ارتباط)
                 </span>
               )}
             </div>

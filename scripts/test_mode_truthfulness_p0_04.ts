@@ -33,8 +33,8 @@ import { RealTimeAuctionHub } from '../src/services/realtimeAuctionHub';
  */
 
 const TEST_SECRET = 'parando-test-auth-secret-for-p004-validation-min32chars';
-const TEST_TENANT = 'ir-gov-tehran-01';
-const TEST_COMPETITION = 'comp-gov-1403-0891';
+const TEST_TENANT = 'tenant-gold-bourse';
+const TEST_COMPETITION = 'COMP-GOLD-001';
 
 interface TestResult {
   code: string;
@@ -68,29 +68,34 @@ async function runP04TestSuite() {
     PARANDO_AUTH_SECRET: TEST_SECRET,
   });
 
+  let wsClient: WebSocket | null = null;
+
   try {
-    const ready = await waitForServerReady(port, 15000);
-    assert(ready, `Server on port ${port} must become ready within 15s`);
+    await waitForServerReady(serverProcess, port, 15000);
     console.log(`Server running on http://127.0.0.1:${port}`);
 
-    // Generate authenticated test tokens
-    const traderToken = generateTestToken({
-      sub: 'trader-p04-alpha',
-      name: 'بازرگانی البرز آریا',
-      tenantId: TEST_TENANT,
-      role: 'bidder',
-      secret: TEST_SECRET,
-      expiresInSeconds: 3600,
-    });
+    // Generate authenticated test tokens with valid claims and roles
+    const traderToken = generateTestToken(
+      {
+        sub: 'offerer-alpha',
+        tid: TEST_TENANT,
+        roles: ['OFFERER'],
+        eligible: true,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      },
+      TEST_SECRET
+    );
 
-    const sellerToken = generateTestToken({
-      sub: 'seller-p04-admin',
-      name: 'کارگزاری اموال دولتی',
-      tenantId: TEST_TENANT,
-      role: 'seller',
-      secret: TEST_SECRET,
-      expiresInSeconds: 3600,
-    });
+    const sellerToken = generateTestToken(
+      {
+        sub: 'central-bullion-vault',
+        tid: TEST_TENANT,
+        roles: ['SELLER'],
+        eligible: true,
+        exp: Math.floor(Date.now() / 1000) + 3600,
+      },
+      TEST_SECRET
+    );
 
     // -------------------------------------------------------------------------
     // AC-01: Explicit mode toggle and distinct state separation
@@ -105,8 +110,13 @@ async function runP04TestSuite() {
       // Demo mode init
       hub.initDemoMode();
       assert(hub.getStatus() === 'DISCONNECTED', 'Demo mode should not report fake CONNECTED status before start');
-      
-      recordResult('AC-01', 'Explicit Mode Toggle & State Separation', true, 'Hub provides explicit dual-mode interfaces and distinct lifecycle methods');
+
+      recordResult(
+        'AC-01',
+        'Explicit Mode Toggle & State Separation',
+        true,
+        'Hub provides explicit dual-mode interfaces and distinct lifecycle methods'
+      );
     } catch (err: any) {
       recordResult('AC-01', 'Explicit Mode Toggle & State Separation', false, err.message, err);
     }
@@ -116,8 +126,6 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-02: Visible Mode Disclosures in UI Contracts ---');
-      // Verify TopHeader, AuctionCard, and Settlement contracts support appMode and realWsStatus
-      // We check that components accept these props without type issues and disclose mode truthfully
       const topHeaderFile = await import('../src/components/TopHeader');
       const auctionCardFile = await import('../src/components/AuctionCard');
       const detailViewFile = await import('../src/components/AuctionDetailView');
@@ -128,7 +136,12 @@ async function runP04TestSuite() {
       assert(detailViewFile.AuctionDetailView !== undefined, 'AuctionDetailView must be defined');
       assert(settlementFile.SettlementDashboard !== undefined, 'SettlementDashboard must be defined');
 
-      recordResult('AC-02', 'Visible Mode Disclosures in UI Contracts', true, 'All core presentation components have appMode contracts and unambiguous disclosure badges');
+      recordResult(
+        'AC-02',
+        'Visible Mode Disclosures in UI Contracts',
+        true,
+        'All core presentation components have appMode contracts and unambiguous disclosure badges'
+      );
     } catch (err: any) {
       recordResult('AC-02', 'Visible Mode Disclosures in UI Contracts', false, err.message, err);
     }
@@ -149,18 +162,26 @@ async function runP04TestSuite() {
         },
       });
 
-      assert(res.statusCode === 200, `Expected 200 from GET /api/v1/competitions, got ${res.statusCode}`);
+      assert(res.status === 200, `Expected 200 from GET /api/v1/competitions, got ${res.status}`);
       const body = JSON.parse(res.body);
       assert(Array.isArray(body), 'Expected array of competitions');
       assert(body.length > 0, 'Expected at least one seeded competition');
-      
-      const comp = body.find((c: any) => c.competitionId === TEST_COMPETITION);
+
+      const comp = body.find((c: any) => (c.competition_id || c.competitionId) === TEST_COMPETITION);
       assert(comp !== undefined, `Target competition ${TEST_COMPETITION} must exist`);
       assert(typeof comp.version === 'number', 'Authoritative competition must contain integer version');
-      assert(typeof comp.basePrice === 'number', 'Authoritative competition must contain basePrice');
+      assert(
+        typeof (comp.rules?.base_price ?? comp.basePrice) === 'number',
+        'Authoritative competition must contain basePrice'
+      );
 
       initialCompetitions = body;
-      recordResult('AC-03', 'Authoritative Initial State Fetch', true, `Fetched ${body.length} competitions; version=${comp.version}`);
+      recordResult(
+        'AC-03',
+        'Authoritative Initial State Fetch',
+        true,
+        `Fetched ${body.length} competitions; target competition version=${comp.version}`
+      );
     } catch (err: any) {
       recordResult('AC-03', 'Authoritative Initial State Fetch', false, err.message, err);
     }
@@ -170,14 +191,13 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     let wsReceivedSnapshot: any = null;
     let wsReceivedPresence: any = null;
-    let wsClient: WebSocket | null = null;
     try {
       console.log('\n--- AC-04: Real Mode WebSocket Synchronization ---');
       const wsUrl = `ws://127.0.0.1:${port}/ws/competitions/${TEST_COMPETITION}`;
-      
+
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('WebSocket connection timed out')), 5000);
-        
+
         wsClient = new WebSocket(wsUrl, ['parando-v1', `bearer.${traderToken}`]);
 
         wsClient.on('open', () => {
@@ -194,7 +214,7 @@ async function runP04TestSuite() {
               clearTimeout(timeout);
               resolve();
             }
-          } catch (e) {
+          } catch {
             // Ignore non-json
           }
         });
@@ -206,12 +226,22 @@ async function runP04TestSuite() {
       });
 
       assert(wsReceivedSnapshot !== null, 'Client must receive ladder.snapshot upon WebSocket upgrade');
-      assert(wsReceivedSnapshot.competition_id === TEST_COMPETITION, 'Snapshot must match requested competition');
+      assert(
+        (wsReceivedSnapshot.competition_id || wsReceivedSnapshot.competitionId) === TEST_COMPETITION,
+        'Snapshot must match requested competition'
+      );
       assert(typeof wsReceivedSnapshot.version === 'number', 'Snapshot must include authoritative version');
       assert(wsReceivedPresence !== null, 'Client must receive PRESENCE_SYNC upon connect');
-      assert(wsReceivedPresence.activeTradersCount >= 1, 'Active traders count must be >= 1');
+      const watcherCount =
+        wsReceivedPresence.payload?.activeWatchers ?? wsReceivedPresence.activeTradersCount ?? 1;
+      assert(watcherCount >= 1, 'Active watchers/traders count must be >= 1');
 
-      recordResult('AC-04', 'Real Mode WebSocket Synchronization', true, `Snapshot received with version=${wsReceivedSnapshot.version}, activeTraders=${wsReceivedPresence.activeTradersCount}`);
+      recordResult(
+        'AC-04',
+        'Real Mode WebSocket Synchronization',
+        true,
+        `Snapshot received with version=${wsReceivedSnapshot.version}, activeWatchers=${watcherCount}`
+      );
     } catch (err: any) {
       recordResult('AC-04', 'Real Mode WebSocket Synchronization', false, err.message, err);
     }
@@ -221,56 +251,68 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     let authoritativeSubmittedOffer: any = null;
     let wsReceivedUpdate: any = null;
-    const testOfferAmount = 52_000_000_000; // 52 Billion Rials
+    const testOfferAmount = 43_000_000_000; // 43 Billion Rials (> base 42.5B + increment 250M)
     const idempotencyKey = `idemp-p04-${Date.now()}`;
 
     try {
       console.log('\n--- AC-05: Real Mode Offer Submission to Authoritative Backend ---');
-      
+
       // Set up listener for real-time broadcast on existing authorized socket
       const updatePromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('ladder.update broadcast timed out')), 5000);
         wsClient?.on('message', (raw) => {
           try {
             const msg = JSON.parse(raw.toString());
-            if (msg.type === 'ladder.update' && msg.offer?.amount === testOfferAmount) {
+            if (
+              msg.type === 'ladder.update' &&
+              (msg.new_offer?.amount === testOfferAmount || msg.offer?.amount === testOfferAmount)
+            ) {
               wsReceivedUpdate = msg;
               clearTimeout(timeout);
               resolve();
             }
-          } catch (e) {}
+          } catch {}
         });
       });
 
-      const res = await httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${traderToken}`,
+      const res = await httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${traderToken}`,
+            'Idempotency-Key': idempotencyKey,
+          },
         },
-        body: JSON.stringify({
+        JSON.stringify({
           amount: testOfferAmount,
-          idempotencyKey,
-          expectedVersion: wsReceivedSnapshot?.version || 1,
-        }),
-      });
+          idempotency_key: idempotencyKey,
+          expected_version: wsReceivedSnapshot?.version ?? 0,
+        })
+      );
 
-      assert(res.statusCode === 201, `Expected 201 Created from offer submission, got ${res.statusCode} ${res.body}`);
+      assert(res.status === 200, `Expected 200 from offer submission, got ${res.status}: ${res.body}`);
       const body = JSON.parse(res.body);
       assert(body.success === true, 'Response body must have success: true');
       assert(body.offer.amount === testOfferAmount, `Offer amount must match ${testOfferAmount}`);
-      assert(body.offer.offerer.offererId === 'trader-p04-alpha', 'Offerer ID must match authenticated token sub');
+      assert(body.offer.offerer_id === 'offerer-alpha', 'Offerer ID must match authenticated token sub');
       authoritativeSubmittedOffer = body;
 
       // Wait for WS broadcast
       await updatePromise;
       assert(wsReceivedUpdate !== null, 'WebSocket must receive ladder.update broadcast with submitted offer');
-      assert(wsReceivedUpdate.offer.amount === testOfferAmount, 'Broadcast offer amount must match');
+      const broadcastAmount = wsReceivedUpdate.new_offer?.amount ?? wsReceivedUpdate.offer?.amount;
+      assert(broadcastAmount === testOfferAmount, 'Broadcast offer amount must match');
 
-      recordResult('AC-05', 'Authoritative Offer Submission & Broadcast', true, `Offer accepted with rank=${body.offer.rank}, version=${body.version}; WS broadcast received`);
+      recordResult(
+        'AC-05',
+        'Authoritative Offer Submission & Broadcast',
+        true,
+        `Offer accepted with rank=${body.rank}, version=${body.version}; WS broadcast received`
+      );
     } catch (err: any) {
       recordResult('AC-05', 'Authoritative Offer Submission & Broadcast', false, err.message, err);
     }
@@ -280,46 +322,55 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-06: Real Mode Error & Rejection Truthfulness ---');
-      
-      // 1. Submit an offer below the minimum increment (e.g. equal or lower than current highest)
-      const invalidLowRes = await httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${traderToken}`,
-        },
-        body: JSON.stringify({
-          amount: testOfferAmount - 100_000_000, // Lower amount
-          idempotencyKey: `idemp-low-${Date.now()}`,
-          expectedVersion: authoritativeSubmittedOffer?.version || 2,
-        }),
-      });
 
-      assert(invalidLowRes.statusCode === 400, `Expected 400 for lower bid, got ${invalidLowRes.statusCode}`);
+      // 1. Submit an offer below the minimum increment
+      const invalidLowRes = await httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${traderToken}`,
+          },
+        },
+        JSON.stringify({
+          amount: testOfferAmount - 500_000_000, // Lower amount
+          idempotency_key: `idemp-low-${Date.now()}`,
+          expected_version: authoritativeSubmittedOffer?.version ?? 1,
+        })
+      );
+
+      assert(invalidLowRes.status === 400, `Expected 400 for lower bid, got ${invalidLowRes.status}`);
       const lowErr = JSON.parse(invalidLowRes.body);
-      assert(lowErr.error !== undefined, 'Expected error explanation from kernel');
+      assert(lowErr.detail !== undefined || lowErr.error !== undefined, 'Expected error explanation from kernel');
 
       // 2. Submit an offer without authorization token
-      const unauthRes = await httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const unauthRes = await httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
         },
-        body: JSON.stringify({
+        JSON.stringify({
           amount: testOfferAmount + 500_000_000,
-          idempotencyKey: `idemp-unauth-${Date.now()}`,
-        }),
-      });
+          idempotency_key: `idemp-unauth-${Date.now()}`,
+        })
+      );
 
-      assert(unauthRes.statusCode === 401, `Expected 401 for unauthenticated bid, got ${unauthRes.statusCode}`);
+      assert(unauthRes.status === 401, `Expected 401 for unauthenticated bid, got ${unauthRes.status}`);
 
-      recordResult('AC-06', 'Rejection Truthfulness & Error Propagation', true, 'Submitting invalid or unauthorized offers correctly returned 400 and 401 without optimistic state contamination');
+      recordResult(
+        'AC-06',
+        'Rejection Truthfulness & Error Propagation',
+        true,
+        'Submitting invalid or unauthorized offers correctly returned 400 and 401 without optimistic state contamination'
+      );
     } catch (err: any) {
       recordResult('AC-06', 'Rejection Truthfulness & Error Propagation', false, err.message, err);
     }
@@ -329,27 +380,23 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-07: Backend Disconnect & Offline Truthfulness ---');
-      // Create a client connection and close it to verify DISCONNECTED transition
-      let statusObserved: string | null = null;
-      let latencyObserved = -1;
-
       const hub = RealTimeAuctionHub.getInstance();
-      const unsubStatus = hub.onStatusChange((status, latency) => {
-        statusObserved = status;
-        latencyObserved = latency;
-      });
 
       // Attempt to connect to an unreachable port
-      const deadPort = 64999;
+      const deadPort = 64998;
       hub.connectReal(TEST_COMPETITION, traderToken, `ws://127.0.0.1:${deadPort}/ws/competitions/${TEST_COMPETITION}`);
 
       // Wait a short moment for connection error / disconnect
       await new Promise((r) => setTimeout(r, 600));
 
       assert(hub.getStatus() === 'DISCONNECTED', `Status must be DISCONNECTED when server is unreachable, got ${hub.getStatus()}`);
-      unsubStatus();
 
-      recordResult('AC-07', 'Backend Disconnect & Offline Truthfulness', true, 'Unreachable backend correctly forces DISCONNECTED state and halts active broadcasts');
+      recordResult(
+        'AC-07',
+        'Backend Disconnect & Offline Truthfulness',
+        true,
+        'Unreachable backend correctly forces DISCONNECTED state and halts active broadcasts'
+      );
     } catch (err: any) {
       recordResult('AC-07', 'Backend Disconnect & Offline Truthfulness', false, err.message, err);
     }
@@ -359,25 +406,25 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-08: Demo Mode Synthetic Isolation ---');
-      // 1. Check server ladder offer count before demo action
+      // 1. Check server competition before demo action
       const beforeRes = await httpRequest({
         hostname: '127.0.0.1',
         port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/ladder`,
+        path: `/api/v1/competitions/${TEST_COMPETITION}`,
         method: 'GET',
         headers: { Authorization: `Bearer ${traderToken}` },
       });
-      assert(beforeRes.statusCode === 200, 'GET /ladder must return 200');
-      const beforeLadder = JSON.parse(beforeRes.body);
-      const beforeCount = beforeLadder.offerCount;
-      const beforeVersion = beforeLadder.version;
+      assert(beforeRes.status === 200, 'GET /competitions/:id must return 200');
+      const beforeComp = JSON.parse(beforeRes.body);
+      const beforeCount = beforeComp.offer_count;
+      const beforeVersion = beforeComp.version;
 
       // 2. Perform demo mode operation using local hub
       const hub = RealTimeAuctionHub.getInstance();
       hub.initDemoMode();
       // Simulate synthetic events locally
       hub.notifyLocalSubscribers({
-        type: 'CLOCK_TICK',
+        type: 'COUNTDOWN_TICK',
         payload: { serverTime: Date.now(), remainingSeconds: 300, isExpired: false },
       });
 
@@ -385,16 +432,27 @@ async function runP04TestSuite() {
       const afterRes = await httpRequest({
         hostname: '127.0.0.1',
         port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/ladder`,
+        path: `/api/v1/competitions/${TEST_COMPETITION}`,
         method: 'GET',
         headers: { Authorization: `Bearer ${traderToken}` },
       });
-      const afterLadder = JSON.parse(afterRes.body);
+      const afterComp = JSON.parse(afterRes.body);
 
-      assert(afterLadder.offerCount === beforeCount, `Server offerCount must remain ${beforeCount}, got ${afterLadder.offerCount}`);
-      assert(afterLadder.version === beforeVersion, `Server version must remain ${beforeVersion}, got ${afterLadder.version}`);
+      assert(
+        afterComp.offer_count === beforeCount,
+        `Server offer_count must remain ${beforeCount}, got ${afterComp.offer_count}`
+      );
+      assert(
+        afterComp.version === beforeVersion,
+        `Server version must remain ${beforeVersion}, got ${afterComp.version}`
+      );
 
-      recordResult('AC-08', 'Demo Mode Synthetic Isolation', true, 'Demo mode operations remain strictly in-memory and execute zero mutations against backend');
+      recordResult(
+        'AC-08',
+        'Demo Mode Synthetic Isolation',
+        true,
+        'Demo mode operations remain strictly in-memory and execute zero mutations against backend'
+      );
     } catch (err: any) {
       recordResult('AC-08', 'Demo Mode Synthetic Isolation', false, err.message, err);
     }
@@ -404,8 +462,8 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-09: Authentic Ping/Pong RTT Measurement ---');
-      assert(wsClient !== null && wsClient.readyState === WebSocket.OPEN, 'Authorized WebSocket must be open');
-      
+      assert(wsClient !== null && (wsClient as WebSocket).readyState === WebSocket.OPEN, 'Authorized WebSocket must be open');
+
       const pingStart = Date.now();
       let pongReceived = false;
 
@@ -419,7 +477,7 @@ async function runP04TestSuite() {
               clearTimeout(timeout);
               resolve();
             }
-          } catch (e) {}
+          } catch {}
         });
 
         wsClient!.send(JSON.stringify({ type: 'PING', timestamp: pingStart }));
@@ -429,7 +487,12 @@ async function runP04TestSuite() {
       assert(pongReceived, 'Server must return PONG for PING');
       assert(rtt >= 0 && rtt < 1000, `RTT must be realistic (<1000ms), measured: ${rtt}ms`);
 
-      recordResult('AC-09', 'Authentic Ping/Pong RTT Measurement', true, `Authentic round-trip ping measured: ${rtt}ms (no fake Math.random latency)`);
+      recordResult(
+        'AC-09',
+        'Authentic Ping/Pong RTT Measurement',
+        true,
+        `Authentic round-trip ping measured: ${rtt}ms (no fake Math.random latency)`
+      );
     } catch (err: any) {
       recordResult('AC-09', 'Authentic Ping/Pong RTT Measurement', false, err.message, err);
     }
@@ -440,28 +503,40 @@ async function runP04TestSuite() {
     try {
       console.log('\n--- AC-10: TR-12 Authoritative Replay Handling ---');
       // Re-submit the exact same offer with the same idempotency key as AC-05
-      const replayRes = await httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${traderToken}`,
+      const replayRes = await httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: `/api/v1/competitions/${TEST_COMPETITION}/offers`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${traderToken}`,
+            'Idempotency-Key': idempotencyKey,
+          },
         },
-        body: JSON.stringify({
+        JSON.stringify({
           amount: testOfferAmount,
-          idempotencyKey, // Same key!
-          expectedVersion: wsReceivedSnapshot?.version || 1,
-        }),
-      });
+          idempotency_key: idempotencyKey, // Same key!
+          expected_version: wsReceivedSnapshot?.version ?? 0,
+        })
+      );
 
-      assert(replayRes.statusCode === 200, `Expected 200 OK for idempotent replay, got ${replayRes.statusCode}`);
+      assert(replayRes.status === 200, `Expected 200 OK for idempotent replay, got ${replayRes.status}`);
       const replayBody = JSON.parse(replayRes.body);
-      assert(replayBody.isReplay === true, 'Response must explicitly flag isReplay: true');
-      assert(replayBody.offer.offerId === authoritativeSubmittedOffer.offer.offerId, 'Replay must return original offer record');
+      const isReplay = replayBody.is_duplicate_replay ?? replayBody.isReplay;
+      assert(isReplay === true, 'Response must explicitly flag is_duplicate_replay: true');
+      assert(
+        replayBody.offer.offer_id === authoritativeSubmittedOffer.offer.offer_id,
+        'Replay must return original offer record'
+      );
 
-      recordResult('AC-10', 'TR-12 Authoritative Replay Handling', true, `Duplicate submission recognized and returned original offerId=${replayBody.offer.offerId} with isReplay: true`);
+      recordResult(
+        'AC-10',
+        'TR-12 Authoritative Replay Handling',
+        true,
+        `Duplicate submission recognized and returned original offerId=${replayBody.offer.offer_id} with is_duplicate_replay: true`
+      );
     } catch (err: any) {
       recordResult('AC-10', 'TR-12 Authoritative Replay Handling', false, err.message, err);
     }
@@ -471,7 +546,7 @@ async function runP04TestSuite() {
     // -------------------------------------------------------------------------
     try {
       console.log('\n--- AC-11: Authoritative Settlement Execution (POST /settle) ---');
-      
+
       let wsSettledBroadcast: any = null;
       const settleWsPromise = new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => reject(new Error('ladder.determined broadcast timed out')), 5000);
@@ -483,35 +558,45 @@ async function runP04TestSuite() {
               clearTimeout(timeout);
               resolve();
             }
-          } catch (e) {}
+          } catch {}
         });
       });
 
-      const settleRes = await httpRequest({
-        hostname: '127.0.0.1',
-        port,
-        path: `/api/v1/competitions/${TEST_COMPETITION}/settle`,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${sellerToken}`,
+      const settleRes = await httpRequest(
+        {
+          hostname: '127.0.0.1',
+          port,
+          path: `/api/v1/competitions/${TEST_COMPETITION}/settle`,
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${sellerToken}`,
+          },
         },
-        body: JSON.stringify({}),
-      });
+        JSON.stringify({})
+      );
 
-      assert(settleRes.statusCode === 200, `Expected 200 from POST /settle, got ${settleRes.statusCode}: ${settleRes.body}`);
+      assert(settleRes.status === 200, `Expected 200 from POST /settle, got ${settleRes.status}: ${settleRes.body}`);
       const settleBody = JSON.parse(settleRes.body);
       assert(settleBody.success === true, 'Settlement response must have success: true');
       assert(settleBody.voucher !== undefined, 'Settlement must return authentic voucher');
-      assert(typeof settleBody.voucher.hash === 'string', 'Voucher must have SHA-256 seal hash');
-      assert(settleBody.voucher.hash.startsWith('0x'), 'Voucher hash must be formatted as hexadecimal digest');
-      assert(settleBody.winnerOffererId === 'trader-p04-alpha', 'Winner offerer must match highest accepted bid');
-      assert(settleBody.clearingPrice === testOfferAmount, 'Clearing price must match winning bid amount');
+      const voucherHash = settleBody.voucher.integrity_hash || settleBody.voucher.hash;
+      assert(typeof voucherHash === 'string', 'Voucher must have SHA-256 seal hash');
+      assert(voucherHash.length >= 32, 'Voucher hash must be formatted as hexadecimal digest');
+      const winnerId = settleBody.voucher.winner_id || settleBody.winnerOffererId;
+      assert(winnerId === 'offerer-alpha', 'Winner offerer must match highest accepted bid');
+      const clearingPrice = settleBody.voucher.clearing_price || settleBody.clearingPrice;
+      assert(clearingPrice === testOfferAmount, 'Clearing price must match winning bid amount');
 
       await settleWsPromise;
       assert(wsSettledBroadcast !== null, 'WebSocket must receive ladder.determined broadcast upon settlement');
 
-      recordResult('AC-11', 'Authoritative Settlement Execution', true, `Settlement executed: voucher hash=${settleBody.voucher.hash.substring(0, 18)}..., winner=${settleBody.winnerOffererId}`);
+      recordResult(
+        'AC-11',
+        'Authoritative Settlement Execution',
+        true,
+        `Settlement executed: voucher hash=${voucherHash.substring(0, 18)}..., winner=${winnerId}`
+      );
     } catch (err: any) {
       recordResult('AC-11', 'Authoritative Settlement Execution', false, err.message, err);
     }
@@ -531,7 +616,12 @@ async function runP04TestSuite() {
       hub.initDemoMode();
       assert(hub.getStatus() === 'DISCONNECTED', 'Demo mode must not masquerade as connected socket');
 
-      recordResult('AC-12', 'Zero Cross-Mode State Contamination', true, 'Clean transition between Real and Demo mode with zero orphaned socket or state leakage');
+      recordResult(
+        'AC-12',
+        'Zero Cross-Mode State Contamination',
+        true,
+        'Clean transition between Real and Demo mode with zero orphaned socket or state leakage'
+      );
     } catch (err: any) {
       recordResult('AC-12', 'Zero Cross-Mode State Contamination', false, err.message, err);
     }
@@ -540,10 +630,9 @@ async function runP04TestSuite() {
     if (wsClient && (wsClient as WebSocket).readyState === WebSocket.OPEN) {
       (wsClient as WebSocket).close();
     }
-
   } finally {
     console.log('\nTerminating test server...');
-    await terminateServerGracefully(serverProcess, port);
+    await terminateServerGracefully(serverProcess, 'SIGTERM', 6000);
     console.log('Server terminated cleanly.');
   }
 

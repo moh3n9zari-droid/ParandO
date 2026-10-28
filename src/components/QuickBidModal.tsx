@@ -32,8 +32,8 @@ export interface QuickBidModalProps {
 }
 
 export const QuickBidModal: React.FC<QuickBidModalProps> = ({
-  appMode = 'real',
-  isServerConnected = true,
+  appMode = 'demo',
+  isServerConnected = false,
   isOpen,
   onClose,
   module,

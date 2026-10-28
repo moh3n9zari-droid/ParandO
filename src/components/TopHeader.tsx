@@ -62,9 +62,9 @@ export const CATEGORIES = [
 ];
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
-  appMode = 'real',
+  appMode = 'demo',
   onToggleMode,
-  realWsStatus = 'CONNECTED',
+  realWsStatus = 'DISCONNECTED',
   searchQuery,
   onSearchChange,
   selectedCategory,
@@ -74,15 +74,15 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   isOnline,
   onOpenResilienceModal,
   pendingQueueCount,
-  unreadNotificationsCount = 3,
+  unreadNotificationsCount = 0,
   watchlistCount = 0,
   onOpenWatchlist,
-  walletBalance = 200_000_000_000,
-  activeExposure = 30_000_000_000,
-  activeBidsCount = 2,
+  walletBalance = 0,
+  activeExposure = 0,
+  activeBidsCount = 0,
   onOpenWalletTab,
   onOpenSellerDashboard,
-  latencyMs = 24,
+  latencyMs = 0,
 }) => {
   const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
 
@@ -136,7 +136,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                   <span className="text-red-400 font-bold">قطع</span>
                 )
               ) : (
-                <span className="text-amber-400 font-bold">شبیه‌سازی: ~{toPersianDigits(latencyMs)}ms</span>
+                <span className="text-amber-400 font-bold">شبیه‌سازی محلی (آفلاین)</span>
               )}
             </div>
 
@@ -301,13 +301,29 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                 onClick={() => onToggleMode(appMode === 'real' ? 'demo' : 'real')}
                 className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer ${
                   appMode === 'real'
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                    ? realWsStatus === 'CONNECTED'
+                      ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/20'
+                      : 'bg-red-500/10 text-red-400 border-red-500/30 hover:bg-red-500/20'
                     : 'bg-amber-500/15 text-amber-300 border-amber-500/40 hover:bg-amber-500/25 ring-1 ring-amber-500/30'
                 }`}
                 title="تغییر حالت کاری سامانه بین بورس واقعی و شبیه‌سازی آزمایشی"
               >
-                <span className={`w-2 h-2 rounded-full ${appMode === 'real' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-                <span>{appMode === 'real' ? 'حالت واقعی بورس' : 'حالت آزمایشی (Demo)'}</span>
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    appMode === 'real'
+                      ? realWsStatus === 'CONNECTED'
+                        ? 'bg-emerald-500'
+                        : 'bg-red-500 animate-pulse'
+                      : 'bg-amber-500'
+                  }`}
+                />
+                <span>
+                  {appMode === 'real'
+                    ? realWsStatus === 'CONNECTED'
+                      ? 'حالت واقعی بورس (متصل)'
+                      : 'حالت واقعی (قطع ارتباط)'
+                    : 'حالت آزمایشی (Demo)'}
+                </span>
               </button>
             )}
 

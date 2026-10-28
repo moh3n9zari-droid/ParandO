@@ -141,7 +141,7 @@ export class RealTimeAuctionHub {
     });
   }
 
-  private notifyLocalSubscribers(event: RealTimeEvent, broadcast: boolean = true) {
+  public notifyLocalSubscribers(event: RealTimeEvent, broadcast: boolean = true) {
     this.messagesCount++;
     this.subscribers.forEach((cb) => {
       try {
@@ -164,8 +164,9 @@ export class RealTimeAuctionHub {
   // Real Mode Authoritative WebSocket Connection
   // ---------------------------------------------------------------------------
 
-  public connectReal(competitionId: string, token: string): void {
-    if (typeof window === 'undefined') return;
+  public connectReal(competitionId: string, token: string, customWsUrl?: string): void {
+    const WsConstructor = typeof WebSocket !== 'undefined' ? WebSocket : (globalThis as any).WebSocket;
+    if (!WsConstructor) return;
 
     // If already connected to same competition with same token, keep active
     if (
@@ -184,12 +185,19 @@ export class RealTimeAuctionHub {
     this.activeToken = token;
     this.setStatus('CONNECTING');
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/competitions/${competitionId}`;
+    let wsUrl: string;
+    if (customWsUrl) {
+      wsUrl = customWsUrl;
+    } else if (typeof window !== 'undefined') {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      wsUrl = `${protocol}//${window.location.host}/ws/competitions/${competitionId}`;
+    } else {
+      wsUrl = `ws://127.0.0.1:3000/ws/competitions/${competitionId}`;
+    }
 
     try {
-      // Browser standard WebSocket subprotocol authentication (AC-07, SAFE_WS_SUBPROTOCOLS)
-      const ws = new WebSocket(wsUrl, ['parando-v1', 'bearer.' + token]);
+      // Browser & Node standard WebSocket subprotocol authentication (AC-07, SAFE_WS_SUBPROTOCOLS)
+      const ws = new WsConstructor(wsUrl, ['parando-v1', 'bearer.' + token]);
       this.activeWs = ws;
 
       ws.onopen = () => {
@@ -200,7 +208,7 @@ export class RealTimeAuctionHub {
         this.startRealHeartbeat();
       };
 
-      ws.onmessage = (event) => {
+      ws.onmessage = (event: any) => {
         if (this.activeWs !== ws) return;
         try {
           if (event.data === 'pong') {
@@ -418,21 +426,14 @@ export class RealTimeAuctionHub {
   public initDemoMode(): void {
     this.disconnectReal();
     this.isReal = false;
-    this.status = 'CONNECTED';
-    this.latencyMs = 24; // Simulated baseline for Demo mode
+    this.status = 'DISCONNECTED';
+    this.latencyMs = 0;
     this.notifyStatus();
-    this.startDemoHeartbeat();
+    this.stopDemoHeartbeat();
   }
 
   private startDemoHeartbeat() {
-    if (typeof window === 'undefined') return;
     this.stopDemoHeartbeat();
-    this.demoInterval = setInterval(() => {
-      if (!this.isReal && this.status === 'CONNECTED') {
-        this.latencyMs = Math.floor(18 + Math.random() * 15);
-        this.notifyStatus();
-      }
-    }, 4000);
   }
 
   private stopDemoHeartbeat() {

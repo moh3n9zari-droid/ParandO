@@ -40,14 +40,14 @@ export interface AuctionDetailViewProps {
 }
 
 export const AuctionDetailView: React.FC<AuctionDetailViewProps> = ({
-  appMode = 'real',
+  appMode = 'demo',
   module,
   competition,
   currentTime,
   onBack,
   onOpenQuickBid,
   isDarkTheme = false,
-  isLiveConnected = true,
+  isLiveConnected = false,
   isWatchlisted = false,
   onToggleWatchlist,
 }) => {
@@ -139,9 +139,13 @@ export const AuctionDetailView: React.FC<AuctionDetailViewProps> = ({
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-500/90 text-slate-950 shadow-md">
                     حالت آزمایشی (شبیه‌سازی)
                   </span>
-                ) : (
+                ) : isLiveConnected ? (
                   <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-600 text-white shadow-md">
                     مظنه رسمی بورس (نسخه v{toPersianDigits(competition.version)})
+                  </span>
+                ) : (
+                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-red-600 text-white shadow-md animate-pulse">
+                    مظنه بورس (قطع ارتباط - غیربرخط)
                   </span>
                 )}
 

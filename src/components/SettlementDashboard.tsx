@@ -54,10 +54,11 @@ export const SettlementDashboard: React.FC<SettlementDashboardProps> = ({
   const netSellerDual = formatDualCurrency(netSellerPayout);
 
   // Authoritative SHA-256 voucher seal in Real mode vs Demo label in Demo mode
-  const sealDigest = serverVoucher?.integrity_hash ||
-    (appMode === 'demo'
+  const sealDigest = appMode === 'real'
+    ? (serverVoucher?.integrity_hash || (isSettled ? 'در انتظار صدور تاییدیه سند از هسته بورس...' : 'حراج در جریان است — تسویه صادر نشده است'))
+    : (isSettled
       ? `DEMO-SIMULATED-SEAL-${competition.competitionId}`
-      : `0x7fa9c812d4a51e6b8c9d01249e0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b`);
+      : 'شبیه‌سازی حراج در جریان است — تسویه صادر نشده است');
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard?.writeText(text);

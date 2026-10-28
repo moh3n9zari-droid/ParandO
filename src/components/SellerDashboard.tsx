@@ -36,10 +36,15 @@ export interface SellerDashboardProps {
   appMode?: 'real' | 'demo';
   serverVoucher?: {
     voucherId?: string;
+    voucher_id?: string;
     hash?: string;
+    integrity_hash?: string;
     clearingPrice?: number;
+    clearing_price?: number;
     winnerOffererId?: string;
+    winner_id?: string;
     settledAt?: string;
+    settled_at?: string;
   };
 }
 
@@ -76,8 +81,8 @@ export const SellerDashboard: React.FC<SellerDashboardProps> = ({
 
   // Truthful voucher hash: use authentic server seal in Real mode
   const voucherHash = appMode === 'real'
-    ? (serverVoucher?.hash || serverVoucher?.voucherId || (isCurrentSettled ? '0x-settled-authoritative-server-record' : 'در انتظار اجرای تسویه قطعی در هسته بورس...'))
-    : `0x9e8b7c6a5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a (شبیه‌سازی)`;
+    ? (serverVoucher?.integrity_hash || serverVoucher?.hash || (isCurrentSettled ? 'در انتظار تاییدیه رسمی سرور بورس...' : 'حراج در جریان است — تسویه صادر نشده است'))
+    : (isCurrentSettled ? `DEMO-SEAL-${currentCompetition.competitionId} (شبیه‌سازی)` : 'حراج شبیه‌سازی در جریان است');
 
   const copyHash = () => {
     navigator.clipboard?.writeText(voucherHash);
