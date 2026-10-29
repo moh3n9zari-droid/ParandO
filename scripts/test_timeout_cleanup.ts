@@ -475,10 +475,14 @@ async function runTimeoutCleanupRegressionTest() {
       },
     };
 
-    const match = indexHtmlContent.match(/<!--DEV_ONLY_SCRIPT_START-->\s*<script>([\s\S]*?)<\/script>\s*<!--DEV_ONLY_SCRIPT_END-->/);
-    assert(match !== null, 'DEV_ONLY_SCRIPT block found in index.html');
+    const devBlockMatch = indexHtmlContent.match(/<!--DEV_ONLY_SCRIPT_START-->([\s\S]*?)<!--DEV_ONLY_SCRIPT_END-->/);
+    assert(devBlockMatch !== null, 'DEV_ONLY_SCRIPT block found in index.html');
 
-    const scriptContent = match![1];
+    // Extract the regular inline script (excluding any preceding type="module" script)
+    const scriptMatch = devBlockMatch![1].match(/<script(?![^>]*\btype\s*=\s*["']?module["']?)[^>]*>([\s\S]*?)<\/script>/);
+    assert(scriptMatch !== null, 'Regular inline script found inside DEV_ONLY_SCRIPT block');
+
+    const scriptContent = scriptMatch![1];
     const sandbox = {
       window: {
         WebSocket: class FakeWebSocket {
