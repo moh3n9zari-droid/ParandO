@@ -2,31 +2,83 @@
 
 ## Purpose
 
-This file represents the current operational state of the project.
+This document represents the current operational state of the repository.
 
-It provides continuity across:
+This document is the primary continuity mechanism of the project.
+
+Its purpose is to preserve project continuity across:
 
 - conversations
 - accounts
 - sessions
+- AI systems
+- development tools
 - environments
-- implementation agents
+- repository participants
 
-Repository reality overrides conversation history.
+This document must always reflect repository reality.
 
-This file must always reflect repository reality.
+Repository reality overrides this document.
+
+If this document becomes inconsistent with repository evidence:
+
+Repository evidence wins.
 
 ---
 
-# Project
+# Repository Identity
 
-Name: ParandO
+Project Name:
 
-Status: ACTIVE
+ParandO
 
-Repository Authority: Git Repository
+Project Status:
 
-Primary Branch: main
+ACTIVE
+
+Repository Authority:
+
+Git Repository
+
+Primary Branch:
+
+main
+
+---
+
+# Continuity Status
+
+Repository Self Sufficiency:
+
+REQUIRED
+
+Participant Neutral:
+
+YES
+
+Project Continuity Source:
+
+PROJECT_STATE.md
+
+Knowledge Authority:
+
+Repository Sources
+
+External Chat Dependency:
+
+NO
+
+Platform Dependency:
+
+NO
+
+Participant Dependency:
+
+NOT ALLOWED
+
+Continuity Status:
+
+ACTIVE
 
 ---
 
@@ -34,11 +86,11 @@ Primary Branch: main
 
 Current Repository Revision:
 
-cc89dbe
+UPDATE_REQUIRED
 
 Last Audited Commit:
 
-PENDING
+UPDATE_REQUIRED
 
 Last Audited Branch:
 
@@ -46,27 +98,83 @@ main
 
 Last Repository Review Date:
 
-PENDING
+UPDATE_REQUIRED
 
 ---
 
-# Current Phase
+# Current Release State
 
 Current Release Phase:
 
-P0
+UPDATE_REQUIRED
 
-Current Active Item:
+Current Active Remediation Item:
 
-P0-04
+UPDATE_REQUIRED
 
 Current Status:
 
-PARTIALLY_COMPLETE
+UPDATE_REQUIRED
+
+---
+
+# Current Product Direction
+
+Product Vision:
+
+Production-Grade Auction Platform
+
+Current MVP Focus:
+
+SIM Card Auction Marketplace
+
+Current Priority Areas:
+
+- Auction Reliability
+- Settlement Reliability
+- Operational Correctness
+- Security
+- Release Readiness
+
+Marketplace Expansion Status:
+
+DEFERRED
+
+Release Readiness Priority:
+
+HIGH
+
+---
+
+# Marketplace Status
+
+Active Categories:
+
+- SIM Cards
+- Premium Numbers
+- Memorable Numbers
+- Permanent SIM Assets
+- Prepaid SIM Assets
+
+Hidden Categories:
+
+- Vehicles
+
+Inactive Categories:
+
+UPDATE_REQUIRED
+
+Future Expansion Capability:
+
+PRESERVED
 
 ---
 
 # Completed Remediation Items
+
+List verified completed items only.
+
+Example:
 
 - P0-01
 - P0-02
@@ -74,19 +182,19 @@ PARTIALLY_COMPLETE
 
 ---
 
-# Current Remediation Item
+# Active Remediation Item
 
 Identifier:
 
-P0-04
+UPDATE_REQUIRED
 
 Status:
 
-PARTIALLY_COMPLETE
+UPDATE_REQUIRED
 
 Summary:
 
-Truthful operational state remediation and validation.
+UPDATE_REQUIRED
 
 ---
 
@@ -94,11 +202,15 @@ Truthful operational state remediation and validation.
 
 Identifier:
 
-P1-01
+UPDATE_REQUIRED
 
 Dependency Status:
 
-WAITING
+UPDATE_REQUIRED
+
+Blocking Dependencies:
+
+UPDATE_REQUIRED
 
 ---
 
@@ -106,19 +218,19 @@ WAITING
 
 P0 Status:
 
-IN_PROGRESS
+UPDATE_REQUIRED
 
 P1 Status:
 
-NOT_STARTED
+UPDATE_REQUIRED
 
 P2 Status:
 
-NOT_STARTED
+UPDATE_REQUIRED
 
 P3 Status:
 
-NOT_STARTED
+UPDATE_REQUIRED
 
 Overall Release Status:
 
@@ -144,41 +256,87 @@ Regression Status:
 
 UNKNOWN
 
+Continuity Validation:
+
+UNKNOWN
+
+---
+
+# Verified Capabilities
+
+Authentication:
+
+VERIFIED
+
+Authorization:
+
+VERIFIED
+
+Auction Lifecycle:
+
+VERIFIED
+
+Real-Time Communication:
+
+VERIFIED
+
+Settlement Workflows:
+
+VERIFIED
+
+Auditability:
+
+PARTIALLY_VERIFIED
+
+Production Certification:
+
+NOT_VERIFIED
+
 ---
 
 # Known Blockers
 
 Current Blockers:
 
-- None
+- None Identified
+
+Last Reviewed:
+
+UPDATE_REQUIRED
 
 ---
 
 # Open Risks
 
-- Release readiness not yet independently verified
+- Release readiness not independently verified
 - Future regression risk
+- Scope expansion risk
+- Participant continuity risk
 - Repository drift risk
 
 ---
 
-# Capability Snapshot
+# Repository Continuity Validation
 
-Verified Capabilities:
+Critical Knowledge Stored In Repository:
 
-- Authentication
-- Authorization
-- Auction Lifecycle
-- Real-Time Communication
-- Settlement Workflows
+YES
 
-Partially Verified Capabilities:
+Critical Knowledge Stored Only In Conversations:
 
-- Production Release Readiness
+NO
 
-Unverified Capabilities:
+Repository Can Continue With New Participant:
 
-- Final Production Certification
+REQUIRED
+
+Repository Can Continue Without Previous Sessions:
+
+REQUIRED
+
+Continuity Validation Status:
+
+UPDATE_REQUIRED
 
 ---
 
@@ -186,68 +344,105 @@ Unverified Capabilities:
 
 Verification Date:
 
-PENDING
+UPDATE_REQUIRED
 
 Verified By:
 
-PENDING
+UPDATE_REQUIRED
 
 Verification Scope:
 
-PENDING
+UPDATE_REQUIRED
+
+Evidence Location:
+
+UPDATE_REQUIRED
 
 ---
 
-# Current Development Target
+# Current Objective
 
 Current Objective:
 
-Complete remaining remediation requirements and progress toward release readiness.
+Advance repository toward release readiness.
+
+Success Condition:
+
+Completion of required remediation work and release gates.
 
 ---
 
-# Completion Rule
+# Project Completion Rule
 
-When:
+The project may be declared:
 
-- all required remediation items are complete
-- all release gates are satisfied
-- no critical blockers remain
-- no critical regressions remain
+PROJECT_COMPLETE
 
-Update:
+only when:
 
-Project Status: PROJECT_COMPLETE
-
-Overall Release Status: READY
+- required remediation items are complete
+- release gates are satisfied
+- production readiness demonstrated
+- no critical blocker remains
+- no critical regression remains
+- repository continuity verified
 
 ---
 
 # Update Requirements
 
-Update this file whenever:
+Update this document whenever:
 
 - active remediation item changes
 - remediation status changes
-- release phase changes
 - repository revision changes
-- blockers change
-- completion status changes
+- release phase changes
 - release readiness changes
+- blockers change
+- risks materially change
+- continuity status changes
 - project completion is declared
 
 ---
 
 # Repository First Rule
 
-If this file conflicts with repository evidence:
+Priority Order:
 
-Repository evidence wins.
+1. Repository Evidence
+2. PROJECT_STATE.md
+3. Repository Sources
+4. Historical Audits
+5. Conversation History
 
-If conversation history conflicts with this file:
+Repository evidence always wins.
 
-This file wins.
+---
 
-If previous audits conflict with repository evidence:
+# Participant Neutrality Rule
 
-Repository evidence wins.
+No critical project knowledge may exist exclusively inside:
+
+- chat history
+- AI memory
+- account memory
+- session memory
+- platform memory
+
+All critical project knowledge must exist inside repository-controlled sources.
+
+Loss of any repository participant must not interrupt project continuity.
+
+---
+
+# Final Principle
+
+This document exists to preserve repository continuity.
+
+This document is not a roadmap.
+
+This document is not a planning document.
+
+This document is not an audit report.
+
+This document records current verified repository reality so that any future repository participant can continue work without access to previous conversations.
