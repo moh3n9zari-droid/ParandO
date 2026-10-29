@@ -1279,6 +1279,21 @@ async function startServer() {
       appType: 'spa',
     });
     app.use(vite.middlewares);
+    app.get('{/*splat}', async (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path === '/health') {
+        return next();
+      }
+      try {
+        const fs = await import('fs/promises');
+        const path = await import('path');
+        let html = await fs.readFile(path.resolve(process.cwd(), 'index.html'), 'utf-8');
+        html = await vite.transformIndexHtml(req.originalUrl || req.url, html);
+        res.status(200).set({ 'Content-Type': 'text/html' }).send(html);
+      } catch (e) {
+        vite.ssrFixStacktrace(e as Error);
+        next(e);
+      }
+    });
   } else {
     app.use(express.static('dist'));
     app.use('/src/assets', express.static('src/assets'));

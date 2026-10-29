@@ -2,7 +2,19 @@
 <html lang="fa" dir="rtl">
   <head>
     <!--DEV_ONLY_SCRIPT_START-->
+    <script type="module">
+      import RefreshRuntime from '/@react-refresh';
+      RefreshRuntime.injectIntoGlobalHook(window);
+      window.$RefreshReg$ = () => {};
+      window.$RefreshSig$ = () => (type) => type;
+      window.__vite_plugin_react_preamble_installed__ = true;
+    </script>
     <script>
+      // Synchronously initialize React Refresh hooks so any module loading before or without the async refresh script doesn't fail preamble check
+      window.$RefreshReg$ = window.$RefreshReg$ || function () {};
+      window.$RefreshSig$ = window.$RefreshSig$ || function () { return function (type) { return type; }; };
+      window.__vite_plugin_react_preamble_installed__ = true;
+
       (function () {
         // AI Studio runtime constraint: HMR is disabled in this environment.
         // Intercept Vite HMR WebSocket so that createWebSocketModuleRunnerTransport resolves cleanly without errors.
