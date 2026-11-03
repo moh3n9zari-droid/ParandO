@@ -1,548 +1,261 @@
 # PROJECT_STATE
 
+Version: 2.0 · Governance alignment edit of 2026-11-03.
+Facts below are carried over from the 2026-10-29 verification. No repository re-verification was performed in this edit.
+
 ## Purpose
 
-This document represents the current operational state of the repository.
+This document records the current operational state of the repository: status, decisions, scope, and open questions. It is Level 8 in the authority hierarchy of `AGENT_CONTEXT.md`.
 
-This document is the primary continuity mechanism of the project.
-
-Its purpose is to preserve project continuity across:
-
-- conversations
-- accounts
-- sessions
-- AI systems
-- development tools
-- environments
-- repository participants
-
-This document must always reflect repository reality.
-
-Repository reality overrides this document.
-
-If this document becomes inconsistent with repository evidence:
-
-Repository evidence wins.
+It records status and owner decisions. It creates no requirements, no release determinations, and no completion claims. Repository evidence overrides this document. If they disagree, repository evidence wins and this document must be corrected in the same change.
 
 ---
 
 # Repository Identity
 
-Project Name:
+- Project: ParandO (پرندو) - National Auction & Competition Ecosystem
+- Project Status: ACTIVE
+- Repository: https://github.com/moh3n9zari-droid/ParandO.git
+- Primary Branch: main
+- Project Owner(s): [OWNER TO FILL]. Repository account: moh3n9zari-droid
 
-ParandO (پرندو) - National Auction & Competition Ecosystem
+---
 
-Project Status:
+# State Pin
 
-ACTIVE
+State as of: 2026-10-29 (last verification 13:52Z; last repository review 14:20Z)
 
-Repository Authority:
-
-Git Repository (https://github.com/moh3n9zari-droid/ParandO.git)
-
-Primary Branch:
-
-main
+- Current Repository Revision: aefe1ccbe6883bac4092fe8230e678bef256eeec ("chore: update project state and audit metadata")
+- Branch: main (local, tracking origin/main)
+- Working Tree: LOCAL_UNCOMMITTED_PATCH. `scripts/test_timeout_cleanup.ts` modified (verified regression fix); untracked `bun.lock`
+- Reported Fix Commit: b197e0210653e26a0d2afabaaf5db6495c2236a4. Source: reported by the user in conversation, which is not evidence. Not present in the local git object store; remote fetch and API return HTTP 404 or require credentials. Status: UNVERIFIED.
+- Remote: https://github.com/moh3n9zari-droid/ParandO.git; local origin/main = aefe1cc
+- Last documented CI run: Run 46 on aefe1cc (https://github.com/moh3n9zari-droid/ParandO/actions/runs/40874667756). Result: FAIL at "Timeout cleanup regression test" (recorded on branch `ci-status`)
+- CI on b197e02: UNVERIFIED. Absence of checks is not treated as a pass.
+- Local validation: 10 of 10 test and build suites pass (exit code 0), run on the working tree above.
 
 ---
 
 # Continuity Status
 
-Repository Self Sufficiency:
-
-REQUIRED
-
-Participant Neutral:
-
-YES
-
-Project Continuity Source:
-
-PROJECT_STATE.md
-
-Knowledge Authority:
-
-Repository Sources, Verified Commits & Verified Test Executions
-
-External Chat Dependency:
-
-NO
-
-Platform Dependency:
-
-NO
-
-Participant Dependency:
-
-NOT ALLOWED
-
-Continuity Status:
-
-ACTIVE (Verified against local main HEAD aefe1cc; remote target b197e02 unverified due to auth boundary)
+- Participant Neutral: YES
+- External Chat Dependency: NO (one item, the b197e02 report above, is conversation-sourced and carries no evidential weight)
+- Governance documents in repository: see "Governance Documents". They must be committed together with this file.
+- Continuity Validation: PARTIAL. Verified against local HEAD aefe1cc only. Not verified against the remote.
 
 ---
 
-# Repository Tracking
+# Governance Documents
 
-Current Repository Revision:
+All nine documents are expected at the repository root, committed together with this file:
 
-aefe1ccbe6883bac4092fe8230e678bef256eeec
+`AGENT_CONTEXT.md`, `PROJECT_OWNER_INTENT.md`, `PRODUCT_CONSTRUCTION_RULES.md`, `RELEASE_READINESS_REMEDIATION_PLAN.md`, `QUALITY_RUBRIC.md`, `PRODUCTION_HARDENING_AND_SECURITY_VERIFICATION_STANDARD.md`, `RELEASE_READINESS_SECURITY_AUDIT_PROTOCOL.md`, `CURRENT_STATE_AUDIT.md`, `PROJECT_STATE.md`
 
-Last Audited Commit:
+If any is absent from the repository, it is MISSING per `AGENT_CONTEXT.md`. Do not substitute a proxy document.
 
-aefe1ccbe6883bac4092fe8230e678bef256eeec ("chore: update project state and audit metadata")
+Non-authoritative repository documents (informational inputs; none may be used as a governance source):
 
-Last Audited Branch:
-
-main (local branch tracking origin/main)
-
-Working Tree Status:
-
-LOCAL_UNCOMMITTED_PATCH (scripts/test_timeout_cleanup.ts modified with verified regression fix; untracked: bun.lock)
-
-Reported Fix Commit:
-
-b197e0210653e26a0d2afabaaf5db6495c2236a4 (Not present in local git object store; remote git fetch and API return HTTP 404 / require credentials)
-
-Remote Repository Tracking:
-
-- Remote URL: https://github.com/moh3n9zari-droid/ParandO.git
-- Local origin/main Tracking Commit: aefe1ccbe6883bac4092fe8230e678bef256eeec
-- Last Documented CI Run: Run 46 on aefe1cc (https://github.com/moh3n9zari-droid/ParandO/actions/runs/40874667756) - failed at "Timeout cleanup regression test" (recorded on branch ci-status)
-- Remote CI Check on b197e02: UNVERIFIED / BLOCKED (Remote Actions runs and commit-status checks cannot be retrieved via CLI/API without authentication; GitHub returns HTTP 404. Per governing rules, absence of checks is strictly NOT treated as a pass. Verification remains blocked without authenticated access).
-- Local Validation Status: 10 of 10 test and build suites fully reproduced and passing locally (exit code 0)
-
-Last Repository Review Date:
-
-2026-10-29 (Timestamp: 2026-10-29T14:20:00Z)
+- `PARANDO_PROJECT_AUDIT.md` (v4.0.0): historical audit input. `CURRENT_STATE_AUDIT.md` is the Level 7 document.
+- `PROJECT_MASTER_STATE.md`: informational. Contains "Production-Ready / Production Certified" claims, which are forbidden conclusions under `QUALITY_RUBRIC.md`. Needs correction or a superseded marker (Q-5).
+- `BUSINESS_COMPLIANCE_CHECK.md`, `README.md`: informational.
+- ADR-001 through ADR-004: valid architecture decisions, subordinate to the governance documents.
+- `evidence/p0-01/` through `evidence/p0-04/`: reports that point to reproducible test commands. Status rests on test results, not on the reports.
 
 ---
 
-# Governance Sources Verification
+# Release Scope
 
-Authoritative Governance Documents Audit:
+UNDEFINED. Owner decision required (Q-1). No release determination may be made until it is recorded.
 
-1. `PROJECT_OWNER_INTENT.md`:
-   - Status: ABSENT (Never committed to repository in any branch or commit history).
-   - Governing Proxy: `README.md` and `PROJECT_MASTER_STATE.md` provide high-level intent, but official owner intent file is absent.
+---
 
-2. `CURRENT_STATE_AUDIT.md`:
-   - Status: ABSENT under this exact filename.
-   - Canonical Proxy: `PARANDO_PROJECT_AUDIT.md` (Lead Software Architect & Systems Audit, v4.0.0).
+# Domain Registry
 
-3. `RELEASE_READINESS_REMEDIATION_PLAN.md`:
-   - Status: ABSENT as a standalone root file.
-   - Canonical Proxy: Remediation specifications and acceptance criteria are distributed across `evidence/p0-01/` through `evidence/p0-04/` and summarized in `PROJECT_MASTER_STATE.md` Section 7.
+| Module | Tenant id | Registry status | Implementation |
+|---|---|---|---|
+| Gold Bullion & Central Bank Coins | tenant-gold-bourse | active | implemented |
+| Petrochemical & Polymer Products | tenant-energy-bourse | active | implemented |
+| Heavy Transport & Fleet Logistics | tenant-automotive-hub | active (maps to the vehicle and transportation domain in the Intent; owner to confirm, Q-4) | implemented |
+| Surplus Government Real Estate & Warehouses | tenant-realty-holding | active | implemented |
+| Agricultural Export Commodities | tenant-agri-commodities | active | implemented |
+| Industrial Machinery & 5-Axis CNC Lines | tenant-industrial-exchange | active | implemented |
+| SIM Cards & Memorable Numbers | none | planned | NOT IMPLEMENTED (no module in `src/data/market_modules.ts`) |
 
-4. `QUALITY_RUBRIC.md`:
-   - Status: ABSENT as a standalone root file.
-   - Permitted Status Vocabulary Applied: `COMPLETE`, `PARTIALLY COMPLETE`, `FAILED`.
+Notes:
 
-5. `PRODUCT_CONSTRUCTION_RULES.md`:
-   - Status: ABSENT as a standalone root file.
-   - Canonical Proxy: Architectural constraints documented in `PROJECT_MASTER_STATE.md` (ADR-001 through ADR-004) and `BUSINESS_COMPLIANCE_CHECK.md`.
+- SIM is the owner-designated initial MVP priority in `PROJECT_OWNER_INTENT.md`. It is not "historical". The earlier state recorded "SIM Card Auction Marketplace" as the MVP focus.
+- Registry status "active" means enabled in `market_modules.ts`. Production reachability of each module is UNVERIFIED.
+- Modular tenant architecture (`MarketModuleConfig`) is preserved.
+- No new modules until the Release Scope is decided.
 
-6. `PROJECT_STATE.md`:
-   - Status: PRESENT at repository root; primary operational continuity record.
+SIM Parity Record: NONE. SIM-first remains in effect. Evidence summary: six modules are implemented and SIM is not, so parity is not established.
 
 ---
 
 # Current Release State
 
-Current Release Phase:
+- Phase: PHASE_0_LOCAL_PRODUCTION_REMEDIATION (pre-production hardening)
+- Active remediation item: P0-01 (timeout cleanup reconciliation)
 
-PHASE_0_LOCAL_PRODUCTION_REMEDIATION (Pre-Production / Hardening)
+## Remediation item status (QUALITY_RUBRIC.md statuses)
 
-Current Active Remediation Item:
+| Item | Status | Basis |
+|---|---|---|
+| P0-01 Process Lifecycle Control | PARTIALLY COMPLETE | Local: `test:smoke` 12/12, `test:escalation` 2/2, `test:failure-cleanup` 6/6, `test:timeout-cleanup` 7/7. Fix is uncommitted. CI run 46 failed on aefe1cc. Evidence: `evidence/p0-01/P0-01_REMEDIATION_EVIDENCE_REPORT.md` |
+| P0-02 Trust Boundary Enforcement | COMPLETE | `npm run test:security` passes: fail-closed on missing secret, mandatory expiration, HS256 enforcement, identity ownership, cross-tenant rejection, auditor isolation. Local run at aefe1cc; the uncommitted change does not touch this item. Evidence: `evidence/p0-02/` |
+| P0-03 Real-Time Communication Security | COMPLETE | `npm run test:websocket-security` 12/12: handshake inspection, no credential reflection in `Sec-WebSocket-Protocol`, subprotocol negotiation, cross-tenant event isolation. Same caveat as P0-02. Evidence: `evidence/p0-03/` |
+| P0-04 Truthful Operational State | COMPLETE | `npm run test:mode` 12/12 (AC-01 to AC-12): dual-mode isolation, real ping/pong RTT, truthful UI badges, TR-12 replay handling, authoritative settlement. Same caveat. Not run in CI (see Known Blockers). Evidence: `evidence/p0-04/` |
+| P0-05 Financial Integrity Verification | PROPOSED (Plan v2.1, awaiting Owner Authorization, Q-2) | Related implementation exists (settlement, commission, escrow holds K-INV-7 and K-INV-14, 26 kernel tests). Acceptance criteria not yet verified. If authorized, status is PARTIALLY COMPLETE until Closure Verification |
+| P1-01 to P1-04 | NOT STARTED | No item-level assessment recorded |
+| P2-01 to P2-03 | NOT STARTED | No item-level assessment recorded |
+| P3-01, P3-02 | NOT STARTED | No item-level assessment recorded |
 
-P0-01_TIMEOUT_CLEANUP_RECONCILIATION
+The caveat for P0-02 to P0-04: results come from a working tree with uncommitted changes outside those items' areas. They are re-confirmed by the clean-commit run that closes P0-01.
 
-Current Status:
+## Release gates (Plan v2.1) and determination
 
-PARTIALLY COMPLETE (P0-01 local test suites pass 100% exit code 0; remote CI run and remote commit confirmation remain blocked by authentication boundary)
+| Gate | State |
+|---|---|
+| G1 All P0 complete | NOT SATISFIED (P0-01 open; P0-05 proposed) |
+| G2 P1 and P3 complete | NOT SATISFIED |
+| G3 Validation Set passes from clean checkout | NOT SATISFIED (CI run 46 failed; remote result unverified; `test:mode` absent from CI) |
+| G4 Release Readiness Audit | NOT PERFORMED |
+| G5 No unresolved regression | No regression detected locally |
+| G6 Release Scope recorded | NOT SATISFIED |
 
----
-
-# Current Product Direction
-
-Product Vision:
-
-Production-Grade Multi-Tenant National Auction & Commodity Exchange Platform (ADR-001, ADR-002, ADR-003, ADR-004)
-
-Current MVP Focus:
-
-DISCREPANCY_RECORDED:
-- Previous `PROJECT_STATE.md` noted: "SIM Card Auction Marketplace"
-- Actual Repository Implementation (`src/data/market_modules.ts`, `server.ts`, `README.md`, `PROJECT_MASTER_STATE.md`): 6 Institutional Mercantile Bourses (Gold Bullion, Petrochemical Polymers, Heavy Commercial Fleet, Commercial Real Estate, Agricultural Commodities, Industrial CNC Machinery).
-- Note: Authoritative market scope resolution requires `PROJECT_OWNER_INTENT.md`.
-
-Current Priority Areas:
-
-- Zero-Regression Test Suite Health (10/10 local suites passing; remote CI synchronization)
-- Financial Integrity & Escrow Hold Enforcement (K-INV-7, K-INV-14)
-- Trust Boundary Security & RBAC (P0-02)
-- WebSocket Isolation & Zero Credential Disclosure (P0-03)
-- Mode Truthfulness & Authoritative Server Alignment (P0-04)
-- Persistent Storage Integration (Currently Ephemeral In-Memory)
-
-Marketplace Expansion Status:
-
-PRESERVED_MULTI_TENANT (6 Active Institutional Bourse Modules)
-
-Release Readiness Priority:
-
-HIGH
-
----
-
-# Marketplace Status
-
-Active Categories (Implemented in Codebase):
-
-- Gold Bullion & Central Bank Coins (`tenant-gold-bourse`)
-- Petrochemical & Polymer Products (`tenant-energy-bourse`)
-- Heavy Transport & Fleet Logistics (`tenant-automotive-hub`)
-- Surplus Government Real Estate & Warehouses (`tenant-realty-holding`)
-- Agricultural Export Commodities (`tenant-agri-commodities`)
-- Industrial Machinery & 5-Axis CNC Lines (`tenant-industrial-exchange`)
-
-Historical / Unverified Categories from Prior State:
-
-- SIM Cards & Memorable Numbers (Not implemented in `market_modules.ts`)
-
-Future Expansion Capability:
-
-PRESERVED (Modular tenant architecture via `MarketModuleConfig`)
-
----
-
-# Completed Remediation Items
-
-Status values per governing Quality Rubric (`COMPLETE`, `PARTIALLY COMPLETE`, `FAILED`):
-
-- **P0-01** (Production Boot, Lifecycle, Graceful Shutdown, Process Group, Escalation & Timeout Cleanup):
-  Status: PARTIALLY COMPLETE (Locally 100% verified: `test:smoke` 12/12 PASS, `test:escalation` 2/2 PASS, `test:failure-cleanup` 6/6 PASS, `test:timeout-cleanup` 7/7 PASS. Regex extraction in Case 7 corrected in working tree to locate regular inline script inside marked block while tolerating preceding React preamble module script. Remote commit presence and remote CI execution are UNVERIFIED / BLOCKED due to unauthenticated GitHub API / git access boundary).
-  Evidence: `evidence/p0-01/P0-01_REMEDIATION_EVIDENCE_REPORT.md`
-
-- **P0-02** (REST API Authentication, Authorization, Tenant Isolation, RBAC & Strict Fail-Closed):
-  Status: COMPLETE (100% PASS via `npm run test:security`; verified Phase A zero-secret fail-closed, Phase B strict expiration, HS256 algorithm enforcement, identity ownership, cross-tenant rejection, and auditor isolation).
-  Evidence: `evidence/p0-02/P0-02_REMEDIATION_EVIDENCE_REPORT.md`
-
-- **P0-03** (WebSocket Upgrade Authentication, Competition Authorization, Tenant Event Isolation & Credential Disclosure Prevention):
-  Status: COMPLETE (100% PASS via `npm run test:websocket-security`, 12/12 test assertions passing; verified handshake header inspection, zero credential reflection in `Sec-WebSocket-Protocol`, subprotocol negotiation, and cross-tenant event isolation).
-  Evidence: `evidence/p0-03/P0-03_REMEDIATION_EVIDENCE_REPORT.md`
-
-- **P0-04** (Truthful Demo/Real Mode Semantics, Authoritative Server Synchronization & Fail-Closed Gating):
-  Status: COMPLETE (100% PASS via `npm run test:mode`, 12/12 acceptance criteria AC-01 through AC-12 passing; verified dual-mode isolation, authentic ping/pong RTT latency, truthful UI badges, TR-12 replay handling, and authoritative settlement execution).
-  Evidence: `evidence/p0-04/P0-04_REMEDIATION_EVIDENCE_REPORT.md`
+Release Determination: NOT READY.
 
 ---
 
 # Active Remediation Item
 
-Identifier:
+Identifier: P0-01
 
-P0-01_TIMEOUT_CLEANUP_RECONCILIATION
+Status: PARTIALLY COMPLETE
 
-Status:
+Summary: `scripts/test_timeout_cleanup.ts` Case 7 was corrected to find the regular inline script inside the `DEV_ONLY_SCRIPT` block without matching the preceding `<script type="module">` Vite React preamble. All 7 cases pass locally. The React dev server runs without preamble detection errors.
 
-PARTIALLY COMPLETE (Verified 7/7 passing in scripts/test_timeout_cleanup.ts and 10/10 test/build suites passing locally; remote push and remote CI conclusion unverified)
+Completion is judged by the P0-01 acceptance criteria in `RELEASE_READINESS_REMEDIATION_PLAN.md`. The following is the closure procedure:
 
-Summary:
-
-Corrected script extraction in `scripts/test_timeout_cleanup.ts` Case 7 to target the regular inline script inside the `DEV_ONLY_SCRIPT` block without matching the preceding `<script type="module">` Vite React preamble. All 7 cases pass cleanly in local execution. Remote commit and remote CI verification remain blocked by authentication boundary.
-
-Acceptance Criteria:
-
-1. `npm run test:timeout-cleanup` exits 0 with all 7 cases passing. (SATISFIED LOCALLY)
-2. `npm run test:smoke`, `npm run test:escalation`, `npm run test:failure-cleanup`, `npm run test:security`, `npm run test:websocket-security`, `npm run test:mode`, `npm test`, `npm run lint`, and `npm run build` continue to exit 0. (SATISFIED LOCALLY)
-3. React dev server executes without preamble detection runtime errors. (SATISFIED LOCALLY)
-4. Fix commit confirmed present on `main` branch. (UNVERIFIED / BLOCKED: Commit b197e02 is absent from local git database; remote git fetch and API return HTTP 404 / prompt for credentials)
-5. Remote GitHub Actions CI run on `main` concludes with `success`. (UNVERIFIED / BLOCKED: Check runs cannot be retrieved via unauthenticated API; absence of checks is strictly NOT treated as a pass)
+1. Commit the working-tree fix, or obtain b197e02 and confirm its content matches the fix.
+2. From a clean checkout of that commit, run all 10 validation commands and record the commit hash and results here.
+3. Remote CI confirmation is not a dependency of this item. It is required for Gate G3 and is obtained when authenticated access is available.
 
 ---
 
-# Next Planned Item
+# Next Item
 
-Identifier:
+Determined by the Plan, not by this file. After P0-01 closes:
 
-STAGE_1_REMEDIATION_PLAN_AND_PERSISTENCE_INTEGRATION
+- If Plan v2.1 is authorized: P0-05 (Q-2).
+- Otherwise: P1 items per the Plan.
 
-Dependency Status:
-
-BLOCKED
-
-Blocking Dependencies:
-
-1. Confirmation of green remote GitHub Actions CI run on commit b197e0210653e26a0d2afabaaf5db6495c2236a4.
-2. Missing Authoritative Planning Documents: `RELEASE_READINESS_REMEDIATION_PLAN.md` and `PROJECT_OWNER_INTENT.md` (required to define post-P0 milestones).
-3. Persistent Database Architecture Decision: Provisioning durable storage (Cloud SQL / PostgreSQL) to replace ephemeral in-memory maps in `server.ts`.
-
----
-
-# Release Readiness
-
-P0 Status:
-
-COMPLETE_LOCALLY (P0-01, P0-02, P0-03, P0-04 all pass 100% locally; remote publication and CI for target fix commit b197e02 remain unverified/blocked by authentication boundary)
-
-P1 Status:
-
-NOT_STARTED / UNVERIFIED
-
-P2 Status:
-
-NOT_STARTED / UNVERIFIED
-
-P3 Status:
-
-NOT_STARTED / UNVERIFIED
-
-Overall Release Status:
-
-NOT_READY (Pre-Production / Ephemeral In-Memory State / Remote CI pending push verification)
+The earlier "STAGE_1_REMEDIATION_PLAN_AND_PERSISTENCE_INTEGRATION" item is retired. It is not a Plan item, and its blocking dependencies were not declared in the Plan. Persistence is addressed by P1-02 in Plan v2.1 and by decision Q-3.
 
 ---
 
 # Repository Health
 
-Build Status:
+Local results (working tree above; PASS or FAIL per `QUALITY_RUBRIC.md`):
 
-COMPLETE (`npm run build` / `compile_applet` succeeds cleanly)
+- `npm test` (core domain kernel): PASS, 26/26
+- `npm run lint` (TypeScript): PASS, 0 errors
+- `npm run build` (Vite): PASS
+- `npm run test:security`: PASS
+- `npm run test:websocket-security`: PASS, 12/12
+- `npm run test:mode`: PASS, 12/12
+- `npm run test:smoke`: PASS, 12/12
+- `npm run test:escalation`: PASS, 2/2
+- `npm run test:failure-cleanup`: PASS, 6/6
+- `npm run test:timeout-cleanup`: PASS, 7/7
 
-Test Status:
+CI: FAIL for run 46 on aefe1cc. Later state UNVERIFIED.
 
-COMPLETE (10 of 10 validation commands passing locally with exit code 0):
-- `npm test` (Core Domain Kernel): 26/26 PASSED (COMPLETE)
-- `npm run lint` (TypeScript type check): 0 errors (COMPLETE)
-- `npm run build` (Vite bundling): Clean build in dist/ (COMPLETE)
-- `npm run test:security` (P0-02 RBAC & Auth): 100% PASSED (COMPLETE)
-- `npm run test:websocket-security` (P0-03 WS Security): 12/12 PASSED (COMPLETE)
-- `npm run test:mode` (P0-04 Truthfulness): 12/12 PASSED (COMPLETE)
-- `npm run test:smoke` (Production Boot & Lifecycle): 12/12 PASSED (COMPLETE)
-- `npm run test:escalation` (Process Escalation): 2/2 PASSED (COMPLETE)
-- `npm run test:failure-cleanup` (Post-Readiness Cleanup): 6/6 PASSED (COMPLETE)
-- `npm run test:timeout-cleanup` (Timeout Path Cleanup): 7/7 PASSED (COMPLETE)
-
-Security Validation:
-
-COMPLETE (Strict fail-closed on missing secret, zero credential disclosure in handshake/protocols, tenant-isolated message bus)
-
-Regression Status:
-
-CLEAN (Zero test regressions across all 10 local validation suites)
-
-Continuity Validation:
-
-COMPLETE (Operational continuity established and verified against remote git revision)
+Regression: none detected across the 10 local suites.
 
 ---
 
-# Verified Capabilities
+# Verified Capabilities (observations, not Rubric statuses)
 
-Authentication (REST & WS):
-
-VERIFIED (`auth_service.ts` enforcing HMAC SHA-256 tokens, mandatory numeric expiration, strict claims)
-
-Authorization & RBAC:
-
-VERIFIED (Role-based access control for `OFFERER`, `SELLER`, `EXCHANGE_ADMIN`, `AUDITOR`)
-
-Multi-Tenant Isolation:
-
-VERIFIED (REST and WebSocket boundaries reject cross-tenant offers, settlement, and events)
-
-Auction Lifecycle:
-
-VERIFIED (Pure domain kernel `Competition`, `CompetitionLadder`, tie-breaking TR-13, idempotency TR-12)
-
-Real-Time Communication:
-
-VERIFIED (`ws` server multiplexed on port 3000, presence tracking, ping/pong heartbeats)
-
-Settlement Workflows:
-
-VERIFIED (ADR-003 commission sharing, VAT, net seller payout, outbid collateral unfreezing, SHA-256 seal digests)
-
-Auditability:
-
-PARTIALLY_VERIFIED (In-memory audit log queryable via `/api/v1/audit/events`; not persisted to durable disk)
-
-Production Certification:
-
-NOT_VERIFIED (Lacks persistent database, production secrets management, and deployment orchestrator)
-
-Master / Admin Provisioning Panel:
-
-NOT_IMPLEMENTED (Basic role checks present; no administrative UI or user provisioning APIs exist)
+- Authentication (REST and WS): `auth_service.ts` enforces HMAC SHA-256 tokens, mandatory numeric expiration, strict claims
+- Authorization and RBAC: `OFFERER`, `SELLER`, `EXCHANGE_ADMIN`, `AUDITOR`
+- Multi-tenant isolation: REST and WebSocket boundaries reject cross-tenant offers, settlement, and events
+- Auction lifecycle: pure domain kernel (`Competition`, `CompetitionLadder`, tie-breaking TR-13, idempotency TR-12)
+- Real-time communication: `ws` server on port 3000, presence tracking, ping/pong heartbeats
+- Settlement: ADR-003 commission sharing, VAT, net seller payout, outbid collateral unfreezing, SHA-256 seal digests
+- Auditability: PARTIALLY VERIFIED. In-memory audit log queryable via `/api/v1/audit/events`; not durable
+- Production certification: NOT VERIFIED. No persistent database, production secrets management, or deployment orchestrator
+- Master/admin provisioning panel: NOT IMPLEMENTED. Basic role checks only. This is the future parent administration platform; the start conditions are in `AGENT_CONTEXT.md`
 
 ---
 
-# Known Blockers
+# Known Blockers and Gaps
 
-Current Blockers:
-
-1. **Remote Repository Access & CI Verification Blocker:**
-   - Target commit `b197e0210653e26a0d2afabaaf5db6495c2236a4` is reported by user, but neither its presence on remote `main` nor its GitHub Actions CI run can be verified from this environment.
-   - Remote repository `moh3n9zari-droid/ParandO` is private/authenticated; `git ls-remote` / `git fetch` fail with credential prompt (`No such device or address`) and GitHub REST API returns HTTP 404.
-   - In the local git database, `main` points to `aefe1ccbe6883bac4092fe8230e678bef256eeec`, and the fix exists as an uncommitted working tree patch.
-   - Verification remains explicitly blocked until authenticated repository access or an authoritative CI artifact is provided.
-
-2. **Missing Authoritative Requirements & Planning Documents:**
-   - `PROJECT_OWNER_INTENT.md` (ABSENT)
-   - `CURRENT_STATE_AUDIT.md` (ABSENT)
-   - `PRODUCT_CONSTRUCTION_RULES.md` (ABSENT)
-   - `QUALITY_RUBRIC.md` (ABSENT)
-   - `RELEASE_READINESS_REMEDIATION_PLAN.md` (ABSENT)
-   *Impact:* Cannot authoritatively establish acceptance gates, release rubric, or post-P0 roadmap.
-
-3. **Ephemeral In-Memory Persistence:**
-   - Server state (`competitionsMap`, `proofsMap`, `seenRecordsMap`, `auditEvents`) resides entirely in process RAM. Restarts reset all auction data.
-
-4. **CI Workflow Parity Gap:**
-   - `.github/workflows/ci.yml` lacks execution step for `npm run test:mode`.
-
-Last Reviewed:
-
-2026-10-29T13:10:00Z
+1. **Remote verification access.** The remote repository is private; `git fetch` and `ls-remote` fail on credentials and the REST API returns HTTP 404. This is not a Plan dependency. It does not block work whose acceptance can be verified from a committed hash. It blocks Gates G3 and G4, and nobody may claim CI PASS without evidence.
+2. **Ephemeral persistence.** `competitionsMap`, `proofsMap`, `seenRecordsMap`, and `auditEvents` live in process RAM; a restart erases all auction data. This cannot satisfy P1-02 (durable state) or P2-02 (audit durability) in Plan v2.1.
+3. **CI parity gap.** `.github/workflows/ci.yml` does not run `npm run test:mode`. Maps to the Required Validation Set (P1-04) and to Gate G3.
 
 ---
 
 # Open Risks
 
-- **Persistence Wipe Risk:** In-memory state is erased whenever container sleeps or server restarts.
-- **Specification Ambiguity Risk:** Marketplace focus (SIM Card vs Commodity Bourses) ambiguous without `PROJECT_OWNER_INTENT.md`.
-- **Premature Production Claims:** Documents such as `PROJECT_MASTER_STATE.md` claim "Production-Ready / Production Certified" despite ephemeral storage and missing database integration.
+- State wipe on restart or container sleep (blocker 2).
+- Premature production claims in `PROJECT_MASTER_STATE.md` (see Governance Documents).
+- Possible dual package manager state: untracked `bun.lock` while `npm` scripts are used. Input for P1-04 (dependency consistency).
+- Scope ambiguity: the implemented modules differ from the Intent's SIM-first MVP (Q-1).
 
 ---
 
-# Repository Continuity Validation
+# Decision and Authorization Log
 
-Critical Knowledge Stored In Repository:
+| Date | Decision or authorization | Recorded by |
+|---|---|---|
+| (none recorded) | | |
 
-YES (Kernels, tests, evidence reports, architecture ADRs present)
+Owner Authorization of the governance set v2.x: PENDING (Q-2).
 
-Critical Knowledge Stored Only In Conversations:
+# Risk Acceptances
 
-NO
+None.
 
-Repository Can Continue With New Participant:
+---
 
-YES (Preserved via `PROJECT_STATE.md` and evidence reports)
+# Open Governance Questions
 
-Repository Can Continue Without Previous Sessions:
-
-YES
-
-Continuity Validation Status:
-
-ACTIVE (Reconciled with local HEAD aefe1cc and verified local working tree patch; remote target b197e02 unverified due to auth boundary)
+- **Q-1 Release Scope.** Which domains and capabilities does the first release cover? Owner decision.
+- **Q-2 Governance authorization.** Authorize governance set v2.x, including Plan v2.1 (P0-05, release gates, Finding Escalation, P1-02 durable state).
+- **Q-3 Persistence architecture.** Required before P1-02. Record the decision (candidate named in earlier state: Cloud SQL / PostgreSQL).
+- **Q-4 Domain mapping.** Confirm that `tenant-automotive-hub` is the Intent's vehicle and transportation domain.
+- **Q-5 Disposition of non-authoritative documents.** `PROJECT_MASTER_STATE.md` and `PARANDO_PROJECT_AUDIT.md`: correct, mark superseded, or archive.
+- **Q-6 Commit governance documents.** Commit the nine documents to the repository root with this file.
 
 ---
 
 # Last Verification
 
-Verification Date:
-
-2026-10-29T13:52:00Z
-
-Verified By:
-
-Principal Systems & Security Architect
-
-Verification Scope:
-
-Verification of local HEAD aefe1cc, independent execution and verification of timeout cleanup fix in working tree across 10/10 test and build suites (100% pass), analysis of remote git authentication boundary, and reconciliation of project state.
-
-Evidence Location:
-
-`/evidence/p0-01/`, `/evidence/p0-02/`, `/evidence/p0-03/`, `/evidence/p0-04/`, `scripts/test_timeout_cleanup.ts`
+- Date: 2026-10-29T13:52:00Z
+- Verified by: Principal Systems & Security Architect
+- Scope: local HEAD aefe1cc; independent execution of the timeout cleanup fix across 10 of 10 suites; analysis of the remote authentication boundary; state reconciliation
+- Evidence: `/evidence/p0-01/` to `/evidence/p0-04/`, `scripts/test_timeout_cleanup.ts`
 
 ---
 
 # Current Objective
 
-Current Objective:
-
-Establish authenticated access to remote repository to verify presence of fix commit b197e02 on remote main and obtain authoritative CI run conclusion, and establish post-P0 remediation plan upon receiving authoritative owner intent documents.
-
-Success Condition:
-
-All 10 test suites exit 0 (SATISFIED); remote CI run concludes with success; release roadmap aligned with owner intent.
-
----
-
-# Project Completion Rule
-
-The project may be declared:
-
-PROJECT_COMPLETE
-
-only when:
-
-- required remediation items are complete
-- release gates are satisfied
-- production readiness demonstrated with durable persistence
-- no critical blocker remains
-- no critical regression remains
-- repository continuity verified
+1. Close P0-01 with a committed clean-checkout verification (see Active Remediation Item).
+2. Obtain owner decisions Q-1 to Q-6.
+3. Obtain remote CI results when authenticated access exists.
 
 ---
 
 # Update Requirements
 
-Update this document whenever:
+Update this file in the same change that alters what it records: active item, remediation status, revision, blockers, risks, scope, domain registry, decisions, or release determination. A standalone state-only update is not progress.
 
-- active remediation item changes
-- remediation status changes
-- repository revision changes
-- release phase changes
-- release readiness changes
-- blockers change
-- risks materially change
-- continuity status changes
-- project completion is declared
+# Authority and Neutrality
 
----
-
-# Repository First Rule
-
-Priority Order:
-
-1. Repository Evidence
-2. PROJECT_STATE.md
-3. Repository Sources
-4. Historical Audits
-5. Conversation History
-
-Repository evidence always wins.
-
----
-
-# Participant Neutrality Rule
-
-No critical project knowledge may exist exclusively inside:
-
-- chat history
-- AI memory
-- account memory
-- session memory
-- platform memory
-
-All critical project knowledge must exist inside repository-controlled sources.
-
-Loss of any repository participant must not interrupt project continuity.
-
----
+Precedence, authority, and neutrality rules are defined in `AGENT_CONTEXT.md`. They are not restated here. Critical project knowledge must exist in repository-controlled sources, never only in conversations or participant memory.
 
 # Final Principle
 
-This document exists to preserve repository continuity.
-
-This document is not a roadmap.
-
-This document is not a planning document.
-
-This document is not an audit report.
-
-This document records current verified repository reality so that any future repository participant can continue work without access to previous conversations.
+This document preserves continuity. It is not a roadmap, a requirement source, or an audit report. It records current verified repository reality so that any participant can continue without prior conversations.
